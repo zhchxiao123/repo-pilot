@@ -18,6 +18,8 @@ DEFAULT_MODEL_ID = "claude-opus-4-8"
 class ModelConfig:
     provider: str = DEFAULT_MODEL_PROVIDER
     model_id: str = DEFAULT_MODEL_ID
+    temperature: float = 0.0
+    max_tokens: int = 2048
 
 
 @dataclass(frozen=True)
@@ -35,10 +37,16 @@ def load_config(overrides: dict | None = None) -> Config:
 
     env_provider = os.environ.get("REPO_PILOT_MODEL_PROVIDER")
     env_model_id = os.environ.get("REPO_PILOT_MODEL_ID")
+    env_temperature = os.environ.get("REPO_PILOT_MODEL_TEMPERATURE")
+    env_max_tokens = os.environ.get("REPO_PILOT_MODEL_MAX_TOKENS")
     if env_provider is not None:
         model = replace(model, provider=env_provider)
     if env_model_id is not None:
         model = replace(model, model_id=env_model_id)
+    if env_temperature is not None:
+        model = replace(model, temperature=float(env_temperature))
+    if env_max_tokens is not None:
+        model = replace(model, max_tokens=int(env_max_tokens))
 
     artifacts_root = os.environ.get("REPO_PILOT_ARTIFACTS_ROOT", "artifacts")
     config = Config(model=model, artifacts_root=artifacts_root)

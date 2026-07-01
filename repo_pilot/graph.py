@@ -174,10 +174,14 @@ def build_graph(
         if result.deferred_reason:
             return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
 
-        # Tier-B gated fallback: only when deterministic planning found nothing
+        # Tier-B gated fallback: only when deterministic planning found nothing.
+        # A model error (e.g. missing API key) degrades to no candidate, never a crash.
         readme = Path(state["repo_dir"]) / "README.md"
         if model_client is not None and readme.is_file():
-            commands = nl_extract_commands(readme.read_text(), model_client)
+            try:
+                commands = nl_extract_commands(readme.read_text(), model_client)
+            except Exception:
+                commands = []
             if commands:
                 ev_id = "ev_nl1"
                 ev = {

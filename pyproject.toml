@@ -11,11 +11,17 @@ dependencies = [
     "click>=8.1",
     "jsonschema>=4.20",
     "langgraph>=1.0",
+    "langchain>=1.0",
+    "langchain-anthropic>=1.0",
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "mypy>=1.8"]
+# extra model providers (default anthropic ships in core); install as needed and
+# select via REPO_PILOT_MODEL_PROVIDER
+openai = ["langchain-openai>=0.2"]
+google = ["langchain-google-genai>=2.0"]
 
 [project.scripts]
 repo-pilot = "repo_pilot.cli:main"

@@ -36,6 +36,7 @@ URL, another remote, or a local path / `file://` URL.
 | `--allow-private-egress` | off | Allow the sandbox to reach private networks (`10/8`, `172.16/12`, `192.168/16`) |
 | `--allow-metadata` | off | Allow the sandbox to reach the cloud metadata endpoint (`169.254.169.254`) |
 | `--no-isolation` | off | Disable network egress isolation entirely |
+| `--no-llm` | off | Disable the LLM fallback seam (run fully deterministically) |
 
 > Security is **default-safe**: without flags, private + metadata egress is
 > blocked. The flags are conscious opt-outs — see [Security](#security).
@@ -46,9 +47,26 @@ URL, another remote, or a local path / `file://` URL.
 |----------|---------|---------|
 | `REPO_PILOT_COMPOSE_CMD` | `docker compose` | The compose command to invoke. Set to `sudo docker compose` if your user needs sudo for Docker, or e.g. a podman-compose wrapper. |
 | `REPO_PILOT_ARTIFACTS_ROOT` | `artifacts` | Default artifacts root (overridden by `--artifacts-root`). |
-| `REPO_PILOT_MODEL_PROVIDER` | `anthropic` | Model provider for the (optional) LLM fallback seam. |
+| `REPO_PILOT_MODEL_PROVIDER` | `anthropic` | Provider for the LLM fallback seam. Any LangChain `init_chat_model` provider (`anthropic`, `openai`, `google_genai`, `bedrock`, …); install that provider's package (see extras). |
 | `REPO_PILOT_MODEL_ID` | `claude-opus-4-8` | Model id for the LLM fallback seam. |
+| `REPO_PILOT_MODEL_TEMPERATURE` | `0.0` | Sampling temperature. |
+| `REPO_PILOT_MODEL_MAX_TOKENS` | `2048` | Max output tokens. |
+| `<PROVIDER>_API_KEY` | — | The provider's API key, read at call time (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
 | `REPO_PILOT_SCHEMAS_DIR` | bundled `schemas/` | Override the JSON Schema directory. |
+
+### LLM fallback seam
+
+Planning is deterministic (evidence-first). The **only** LLM use is a *gated
+fallback*: when deterministic extraction finds no run command (e.g. instructions
+live only in README prose), the model proposes one — and the sandbox still verifies
+it (ADR-0004). The model layer is provider-agnostic via LangChain
+`init_chat_model` (ADR-0005): switch providers with `REPO_PILOT_MODEL_PROVIDER` +
+`REPO_PILOT_MODEL_ID`, no code change.
+
+- Default provider `anthropic` ships in core; add others via extras:
+  `pip install -e '.[openai]'` / `'.[google]'`.
+- If no API key is set (or the seam can't be built), the run **degrades to
+  deterministic-only** — no crash. Use `--no-llm` to disable it explicitly.
 
 ## Outputs
 
