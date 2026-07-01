@@ -11,6 +11,7 @@ dependencies = [
     "click>=8.1",
     "jsonschema>=4.20",
     "langgraph>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

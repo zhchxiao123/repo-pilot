@@ -1,7 +1,8 @@
 """Report Writer (§14.6).
 
-Renders the human-readable Markdown report. This slice emits repo identification;
-later slices add detection, the Verified Runbook, targets, and test results.
+Renders the human-readable Markdown report: repo identification plus, when a
+Runbook is present, the runtime verdict. Later slices add discovered targets and
+test results.
 """
 
 from __future__ import annotations
@@ -9,11 +10,33 @@ from __future__ import annotations
 from repo_pilot.cloner import RepoRef
 
 
-def render_report(repo_url: str, repo_ref: RepoRef) -> str:
-    return (
-        "# repo-pilot report\n\n"
-        "## Repository\n\n"
-        f"- URL: {repo_url}\n"
-        f"- Commit: {repo_ref.commit}\n"
-        f"- Default branch: {repo_ref.default_branch}\n"
-    )
+def render_report(repo_url: str, repo_ref: RepoRef, runbook: dict | None = None) -> str:
+    lines = [
+        "# repo-pilot report",
+        "",
+        "## Repository",
+        "",
+        f"- URL: {repo_url}",
+        f"- Commit: {repo_ref.commit}",
+        f"- Default branch: {repo_ref.default_branch}",
+        "",
+    ]
+
+    if runbook is not None:
+        lines += ["## Runtime", ""]
+        if runbook.get("status") == "verified":
+            hc = runbook.get("verification", {}).get("healthcheck_result", {})
+            lines.append("- Status: verified")
+            lines.append(f"- Healthcheck: {hc.get('status_code')} at {hc.get('url')}")
+            reproduce = runbook.get("verification", {}).get("reproduce", [])
+            if reproduce:
+                lines += ["", "### Reproduce", "", "```", *reproduce, "```"]
+        else:
+            lines.append("- Status: not verified (failed)")
+            logs = runbook.get("verification", {}).get("logs_summary")
+            if logs:
+                excerpt = "\n".join(logs.strip().splitlines()[-20:])
+                lines += ["", "### Logs", "", "```", excerpt, "```"]
+        lines.append("")
+
+    return "\n".join(lines)

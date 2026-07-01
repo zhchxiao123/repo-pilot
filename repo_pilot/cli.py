@@ -10,6 +10,7 @@ import click
 
 from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
+from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 from repo_pilot.graph import build_graph, initial_state
 
 
@@ -36,16 +37,25 @@ def run(repo_url: str, commit: str | None, artifacts_root: str | None) -> None:
     click.echo(f"Job: {job.job_id}")
     click.echo(f"Repo: {repo_url}" + (f" @ {commit}" if commit else ""))
 
-    graph = build_graph()
-    graph.invoke(
-        initial_state(
-            repo_url=repo_url,
-            commit=commit,
-            repo_dir=str(job.dir / "repo"),
-            report_path=str(job.report_path),
-        )
+    # Real sandbox: run the generated compose against the local Docker daemon,
+    # waiting up to ~120s for the app to become healthy (ADR-0002).
+    graph = build_graph(
+        DockerSandboxExecutor(), healthcheck_retries=60, poll_interval=2.0
     )
+    try:
+        final = graph.invoke(
+            initial_state(
+                repo_url=repo_url,
+                commit=commit,
+                repo_dir=str(job.dir / "repo"),
+                report_path=str(job.report_path),
+                runbook_path=str(job.runbook_path),
+            )
+        )
+    except DockerUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
 
+    click.echo(f"Verified: {final.get('verified', False)}")
     click.echo(f"Report: {job.report_path}")
 
 
