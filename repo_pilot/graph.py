@@ -11,6 +11,7 @@ State is the thin, typed Runbook-spine plus a ``visited`` execution trace.
 
 from __future__ import annotations
 
+import json
 import operator
 import time
 from pathlib import Path
@@ -19,12 +20,14 @@ from typing import Annotated, Any, Callable, TypedDict
 import yaml
 from langgraph.graph import END, START, StateGraph
 
+from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
 from repo_pilot.compose import compile_compose, iter_step_commands
+from repo_pilot.evidence import write_evidence
 from repo_pilot.executor import SandboxExecutor
 from repo_pilot.healthcheck import run_healthcheck
 from repo_pilot.report import render_report
-from repo_pilot.schemas import validate_runbook
+from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
 MACRO_PHASES = ["clone", "profile", "plan", "verify", "discover", "test", "report"]
 
@@ -36,6 +39,8 @@ class State(TypedDict, total=False):
     repo_dir: str
     report_path: str
     runbook_path: str
+    profile_path: str
+    evidence_path: str
     # Runbook-spine slots
     repo_ref: RepoRef
     profile: Any
@@ -57,6 +62,8 @@ def initial_state(
     repo_dir: str,
     report_path: str,
     runbook_path: str,
+    profile_path: str,
+    evidence_path: str,
 ) -> State:
     return {
         "repo_url": repo_url,
@@ -64,6 +71,8 @@ def initial_state(
         "repo_dir": repo_dir,
         "report_path": report_path,
         "runbook_path": runbook_path,
+        "profile_path": profile_path,
+        "evidence_path": evidence_path,
         "evidence": [],
         "attempts": [],
         "verified": False,
@@ -110,6 +119,19 @@ def build_graph(
             state["repo_url"], commit=state.get("commit"), dest=state["repo_dir"]
         )
         return {"repo_ref": ref, "visited": ["clone"]}
+
+    def _profile(state: State) -> dict:
+        prof, evidence = profiler.profile(state["repo_dir"])
+        prof["repo"] = {
+            "url": state["repo_url"],
+            "commit": state["repo_ref"].commit,
+        }
+        validate_profile(prof)
+        for item in evidence:
+            validate_evidence(item)
+        Path(state["profile_path"]).write_text(json.dumps(prof, indent=2))
+        write_evidence(state["evidence_path"], evidence)
+        return {"profile": prof, "evidence": evidence, "visited": ["profile"]}
 
     def _plan(state: State) -> dict:
         runbook = _hardcoded_runbook(state["repo_url"], state["repo_ref"])
@@ -180,7 +202,7 @@ def build_graph(
 
     graph = StateGraph(State)
     graph.add_node("clone", _clone)
-    graph.add_node("profile", _passthrough("profile"))
+    graph.add_node("profile", _profile)
     graph.add_node("plan", _plan)
     graph.add_node("verify", _verify)
     graph.add_node("discover", _passthrough("discover"))

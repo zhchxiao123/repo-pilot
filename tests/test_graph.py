@@ -4,11 +4,13 @@ The Sandbox Executor is injected (ADR-0004 seam) so the whole pipeline runs with
 no Docker.
 """
 
+import json
+
 import yaml
 
 from repo_pilot.executor import FakeSandboxExecutor
 from repo_pilot.graph import MACRO_PHASES, build_graph, initial_state
-from repo_pilot.schemas import validate_runbook
+from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
 
 def _run(executor, tmp_path, origin):
@@ -20,6 +22,8 @@ def _run(executor, tmp_path, origin):
             repo_dir=str(tmp_path / "work" / "repo"),
             report_path=str(tmp_path / "report.md"),
             runbook_path=str(tmp_path / "runbook.yaml"),
+            profile_path=str(tmp_path / "repo-profile.json"),
+            evidence_path=str(tmp_path / "evidence.jsonl"),
         )
     )
 
@@ -73,6 +77,25 @@ def test_verify_failure_yields_failure_report_with_logs(tmp_path, git_origin):
     report = (tmp_path / "report.md").read_text()
     assert "not verified" in report.lower()
     assert "boom" in report  # captured logs surfaced in the failure report
+
+
+def test_profile_phase_writes_valid_artifacts(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    _run(_success_executor(), tmp_path, origin)
+
+    profile = json.loads((tmp_path / "repo-profile.json").read_text())
+    validate_profile(profile)
+    assert "javascript" in profile["languages"]
+    assert "express" in profile["frameworks"]
+
+    lines = (tmp_path / "evidence.jsonl").read_text().splitlines()
+    evidence = [json.loads(line) for line in lines]
+    for item in evidence:
+        validate_evidence(item)
+    ids = {e["id"] for e in evidence}
+    # entrypoint conclusions resolve to real evidence items
+    for entry in profile["entrypoints"]:
+        assert set(entry["evidence_refs"]) <= ids
 
 
 def test_macro_phases_are_the_documented_dag():

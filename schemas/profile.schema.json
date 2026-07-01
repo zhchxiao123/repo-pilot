@@ -49,7 +49,15 @@
       }
     },
     "ports": { "type": "array", "items": { "type": "integer" } },
-    "is_monorepo": { "type": "boolean", "default": false }
+    "is_monorepo": { "type": "boolean", "default": false },
+    "evidence_refs": {
+      "type": "object",
+      "description": "Maps a scalar conclusion (e.g. 'framework:express') to the Evidence items backing it (ADR-0010).",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^ev_[0-9a-zA-Z]+$" }
+      }
+    }
   },
   "$defs": {
     "evidence_refs": {

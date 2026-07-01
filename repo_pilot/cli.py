@@ -50,6 +50,8 @@ def run(repo_url: str, commit: str | None, artifacts_root: str | None) -> None:
                 repo_dir=str(job.dir / "repo"),
                 report_path=str(job.report_path),
                 runbook_path=str(job.runbook_path),
+                profile_path=str(job.profile_path),
+                evidence_path=str(job.evidence_path),
             )
         )
     except DockerUnavailable as exc:

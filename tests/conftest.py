@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,23 @@ def git_origin(tmp_path):
     _git(origin, "commit", "-q", "-m", "second")
     second = _git(origin, "rev-parse", "HEAD")
     return origin, first, second
+
+
+@pytest.fixture
+def git_repo_from(tmp_path):
+    """Init a git repo populated from a source directory. Returns (path, commit)."""
+
+    def _make(src: Path) -> tuple[Path, str]:
+        origin = tmp_path / "src-origin"
+        shutil.copytree(src, origin)
+        _git(origin, "init", "-q", "-b", "main")
+        _git(origin, "config", "user.email", "t@t.t")
+        _git(origin, "config", "user.name", "t")
+        _git(origin, "add", "-A")
+        _git(origin, "commit", "-q", "-m", "import")
+        return origin, _git(origin, "rev-parse", "HEAD")
+
+    return _make
 
 
 @pytest.fixture
