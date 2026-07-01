@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repo-pilot"
+version = "0.1.0"
+description = "Turn a GitHub repo into a Verified Runbook plus a smoke-test report."
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "jsonschema>=4.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+repo-pilot = "repo_pilot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["repo_pilot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that require Docker (slow); excluded from the default run",
+]
+addopts = "-m 'not integration'"

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-pilot/schemas/profile.schema.json",
+  "title": "Repository Profile",
+  "description": "Static-analysis facts about a repo (§5.1). Facts only, no chosen run command. Conclusions carry evidence_refs (ADR-0010).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repo", "languages", "package_managers"],
+  "properties": {
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "commit"],
+      "properties": {
+        "url": { "type": "string" },
+        "commit": { "type": "string" },
+        "subdir": { "type": "string", "default": "." }
+      }
+    },
+    "languages": { "type": "array", "items": { "type": "string" } },
+    "frameworks": { "type": "array", "items": { "type": "string" } },
+    "package_managers": { "type": "array", "items": { "type": "string" } },
+    "entrypoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "command", "evidence_refs"],
+        "properties": {
+          "type": { "type": "string", "enum": ["script", "module", "binary", "compose", "inferred"] },
+          "file": { "type": "string" },
+          "key": { "type": "string" },
+          "command": { "type": "string" },
+          "evidence_refs": { "$ref": "#/$defs/evidence_refs" }
+        }
+      }
+    },
+    "runtime_versions": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "services": { "type": "array", "items": { "type": "string" } },
+    "env_vars": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "array", "items": { "type": "string" } },
+        "optional": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ports": { "type": "array", "items": { "type": "integer" } },
+    "is_monorepo": { "type": "boolean", "default": false }
+  },
+  "$defs": {
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^ev_[0-9a-zA-Z]+$" },
+      "description": "References into the canonical Evidence Store (ADR-0010)."
+    }
+  }
+}

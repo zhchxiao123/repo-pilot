@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-pilot/schemas/evidence.schema.json",
+  "title": "Evidence Item",
+  "description": "One traceable fact backing a conclusion. Canonical home is evidence.jsonl (ADR-0010).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "file", "kind", "excerpt", "reason", "confidence"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-zA-Z]+$",
+      "description": "Stable unique id, referenced by evidence_refs elsewhere."
+    },
+    "file": {
+      "type": "string",
+      "description": "Repo-relative path the fact was read from."
+    },
+    "line": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "1-based line number, or null when not line-specific."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "ci_step",
+        "ci_service",
+        "readme_command",
+        "readme_env",
+        "dockerfile",
+        "compose_service",
+        "devcontainer",
+        "package_script",
+        "package_manager",
+        "manifest_dependency",
+        "runtime_version",
+        "entrypoint_inference",
+        "port_inference",
+        "llm_inference"
+      ],
+      "description": "Signal source class (§6). llm_inference is the weakest and always secondary (ADR-0004)."
+    },
+    "excerpt": {
+      "type": "string",
+      "description": "Raw source snippet, redacted per §20.2."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why this snippet supports the conclusion."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Per-item confidence before aggregation (§7.1)."
+    }
+  }
+}

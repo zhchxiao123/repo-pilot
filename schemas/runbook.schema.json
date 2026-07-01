@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-pilot/schemas/runbook.schema.json",
+  "title": "Runbook",
+  "description": "The source of truth for how to run a repo (ADR-0003). One artifact spans candidate -> verified via `status`. compile(runbook) -> compose.generated.yaml is the only executor input. Conclusions carry evidence_refs (ADR-0010).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "status", "repo", "runtime", "steps", "healthcheck"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "v1" },
+    "id": { "type": "string", "description": "Candidate id, e.g. node_pnpm_dev (§5.2)." },
+    "status": {
+      "type": "string",
+      "enum": ["candidate", "verified", "failed"],
+      "description": "candidate=proposed; verified=started & healthcheck passed; failed=exhausted (§5.2/§5.3)."
+    },
+    "confidence": {
+      "type": "number", "minimum": 0, "maximum": 1,
+      "description": "Aggregated candidate confidence (§7.1, ADR-0011). Deterministic, not LLM."
+    },
+    "evidence_refs": { "$ref": "#/$defs/evidence_refs" },
+    "fallbacks": {
+      "type": "array", "items": { "type": "string" },
+      "description": "Alternate start commands to try (§5.2)."
+    },
+
+    "repo": {
+      "type": "object", "additionalProperties": false,
+      "required": ["url", "commit"],
+      "properties": {
+        "url": { "type": "string" },
+        "commit": { "type": "string" },
+        "subdir": { "type": "string", "default": "." }
+      }
+    },
+
+    "profile_summary": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "project_type": { "type": "array", "items": { "type": "string" } },
+        "languages": { "type": "array", "items": { "type": "string" } },
+        "frameworks": { "type": "array", "items": { "type": "string" } },
+        "package_managers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["image", "workdir"],
+      "properties": {
+        "image": { "type": "string", "description": "Base image for the app service." },
+        "user": { "type": "string", "default": "sandbox", "description": "Non-root (§8.2)." },
+        "workdir": { "type": "string" },
+        "resources": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "number" },
+            "memory": { "type": "string" },
+            "pids": { "type": "integer" },
+            "timeout_seconds": { "type": "integer", "default": 900 }
+          }
+        }
+      }
+    },
+
+    "security": {
+      "type": "object", "additionalProperties": false,
+      "description": "v1 envelope (ADR-0007). Compiler emits these on every service.",
+      "properties": {
+        "egress": { "type": "string", "enum": ["block_private", "allow_private"], "default": "block_private" },
+        "allow_metadata": { "type": "boolean", "default": false },
+        "isolation": { "type": "boolean", "default": true }
+      }
+    },
+
+    "services": {
+      "type": "array",
+      "description": "Dependency services as sibling containers (ADR-0002).",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "image"],
+        "properties": {
+          "name": { "type": "string" },
+          "image": { "type": "string" },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["container"],
+              "properties": {
+                "container": { "type": "integer" },
+                "host": { "type": ["integer", "null"], "description": "null => random host port (§9.2)." }
+              }
+            }
+          },
+          "healthcheck": {
+            "type": "object", "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["command", "http", "port"] },
+              "command": { "type": "string" }
+            }
+          },
+          "evidence_refs": { "$ref": "#/$defs/evidence_refs" }
+        }
+      }
+    },
+
+    "env": {
+      "type": "object", "additionalProperties": false,
+      "description": "Only dummy/generated values in v1 — no real secrets (ADR-0007, §20.2).",
+      "properties": {
+        "generated": { "type": "object", "additionalProperties": { "type": "string" } },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "optional": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "steps": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start"],
+      "properties": {
+        "setup": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "build": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "migrate": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "start": { "type": "array", "items": { "$ref": "#/$defs/step" }, "minItems": 1 }
+      }
+    },
+
+    "healthcheck": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "type": "string", "enum": ["http", "port", "log"] },
+        "url_candidates": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Probed paths in order (§24.2): /health, /api/health, /docs, /openapi.json, /."
+        },
+        "acceptable_status": {
+          "type": "array", "items": { "type": "integer" },
+          "default": [200, 301, 302, 404]
+        },
+        "log_ready_pattern": { "type": "string" },
+        "timeout_seconds": { "type": "integer", "default": 120 }
+      }
+    },
+
+    "test": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "existing_commands": { "type": "array", "items": { "type": "string" } },
+        "generated": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "types": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["smoke", "api", "ui"] }
+            }
+          }
+        }
+      }
+    },
+
+    "verification": {
+      "type": "object", "additionalProperties": false,
+      "description": "Populated when status=verified (§5.3). Written only from sandbox facts (ADR-0004).",
+      "properties": {
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["container", "host"],
+            "properties": { "container": { "type": "integer" }, "host": { "type": "integer" } }
+          }
+        },
+        "healthcheck_result": {
+          "type": "object", "additionalProperties": false,
+          "required": ["passed"],
+          "properties": {
+            "passed": { "type": "boolean" },
+            "url": { "type": "string" },
+            "status_code": { "type": "integer" }
+          }
+        },
+        "logs_summary": { "type": "string" },
+        "reproduce": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "repair_history": {
+      "type": "array",
+      "description": "Ordered patch attempts (§9.3). Repair edits only the Runbook (ADR-0003).",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["attempt", "diagnosis", "patch", "result"],
+        "properties": {
+          "attempt": { "type": "integer", "minimum": 1 },
+          "diagnosis": { "type": "string" },
+          "patch": { "type": "string", "description": "Human-readable summary of the Runbook change." },
+          "evidence": { "type": "string", "description": "Log excerpt justifying the diagnosis." },
+          "source": { "type": "string", "enum": ["rule", "llm"], "description": "§9.2 table (rule) or Tier-B fallback (llm)." },
+          "result": { "type": "string" }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^ev_[0-9a-zA-Z]+$" },
+      "description": "References into the canonical Evidence Store (ADR-0010)."
+    },
+    "step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string" },
+        "optional": { "type": "boolean", "default": false },
+        "background": { "type": "boolean", "default": false },
+        "expected_ports": { "type": "array", "items": { "type": "integer" } },
+        "evidence_refs": { "$ref": "#/$defs/evidence_refs" }
+      }
+    }
+  }
+}
