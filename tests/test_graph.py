@@ -104,6 +104,15 @@ def test_profile_phase_writes_valid_artifacts(tmp_path, git_repo_from, fixture_r
         assert set(entry["evidence_refs"]) <= ids
 
 
+def test_discover_populates_targets_from_running_app(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    final = _run(_success_executor(), tmp_path, origin)
+    assert final["targets"]  # discovered from the live (fake) app
+    assert "Test targets" in (tmp_path / "report.md").read_text()
+
+
 def test_compose_only_repo_yields_deferred_report(tmp_path, git_repo_from):
     src = tmp_path / "composeonly"
     src.mkdir()

@@ -15,6 +15,7 @@ def render_report(
     repo_ref: RepoRef,
     runbook: dict | None = None,
     deferred_reason: str | None = None,
+    targets: list[dict] | None = None,
 ) -> str:
     lines = [
         "# repo-pilot report",
@@ -55,5 +56,11 @@ def render_report(
             excerpt = "\n".join(logs.strip().splitlines()[-20:])
             lines += ["", "### Logs", "", "```", excerpt, "```"]
     lines.append("")
+
+    if targets:
+        lines += ["## Test targets", ""]
+        for t in targets:
+            lines.append(f"- {t['method']} {t['path']} ({t['source']})")
+        lines.append("")
 
     return "\n".join(lines)
