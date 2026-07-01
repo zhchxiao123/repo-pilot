@@ -38,20 +38,26 @@ def _make_stub(tmp_path: Path) -> str:
 
 
 def test_start_writes_compose_parses_ports_and_captures_logs(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
     executor = DockerSandboxExecutor(compose_cmd=["bash", _make_stub(tmp_path)])
-    sandbox = executor.start(compile_compose(RUNBOOK), repo_dir="/host/clone")
+    sandbox = executor.start(compile_compose(RUNBOOK), repo_dir=str(repo))
     try:
         assert sandbox.ports == {3000: 49999}
         assert "fake app started" in sandbox.logs
+        # the repo was copied in via a generated Dockerfile (no bind mount)
+        assert (repo / "Dockerfile.repopilot").is_file()
     finally:
         sandbox.stop()
 
 
 def test_missing_compose_binary_raises_docker_unavailable(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
     executor = DockerSandboxExecutor(compose_cmd=["repo-pilot-no-such-binary"])
     try:
         raised = False
-        executor.start(compile_compose(RUNBOOK), repo_dir="/host/clone")
+        executor.start(compile_compose(RUNBOOK), repo_dir=str(repo))
     except DockerUnavailable:
         raised = True
     assert raised

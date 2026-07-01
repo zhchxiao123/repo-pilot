@@ -71,6 +71,24 @@ def render_compose(compose: dict) -> str:
     return yaml.safe_dump(compose, default_flow_style=False, sort_keys=True)
 
 
+def with_repo_build(compose: dict, context_dir: str, dockerfile: str) -> dict:
+    """Return a copy of ``compose`` where the app is built (code copied in) rather
+    than bind-mounted.
+
+    Building streams the context to the daemon over the API, so it works even when
+    the daemon does not share the host filesystem (unlike bind mounts). No-op if
+    there is no app service with a working_dir.
+    """
+    app = compose.get("services", {}).get("app")
+    if not app or "working_dir" not in app:
+        return compose
+    result = copy.deepcopy(compose)
+    built = result["services"]["app"]
+    built.pop("image", None)
+    built["build"] = {"context": context_dir, "dockerfile": dockerfile}
+    return result
+
+
 def with_repo_mount(compose: dict, repo_dir: str) -> dict:
     """Return a copy of ``compose`` with the cloned repo bind-mounted into the app.
 

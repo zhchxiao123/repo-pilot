@@ -14,5 +14,5 @@ services:
     - target: 3000
     security_opt:
     - no-new-privileges:true
-    user: sandbox
+    user: 1000:1000
     working_dir: /workspace/repo

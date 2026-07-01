@@ -42,6 +42,14 @@ The dangerous mode is a deliberate operator choice, never a silent default. The
 zero cost to legitimate runs, catastrophic/irreversible downside (leaked cloud
 credentials on a cloud VM).
 
+## Amendment (2026-07-02, ADR-0013)
+
+Integration testing showed the app container must run as **root inside the
+hardened container** (cap_drop ALL + no-new-privileges + limits still apply) to
+write its own layer/caches when the repo is copied in via `docker build`. Under
+rootless Docker container-root maps to an unprivileged host user. The non-root
+default is relaxed for the app container only; the rest of the envelope stands.
+
 ## Consequences
 
 - Package downloads and public connectivity work out of the box; the block only

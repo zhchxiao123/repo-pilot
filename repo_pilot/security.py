@@ -18,7 +18,10 @@ METADATA_CIDR = "169.254.169.254/32"
 _DEFAULT_MEMORY = "4g"
 _DEFAULT_CPUS = 2.0
 _DEFAULT_PIDS = 512
-_NON_ROOT_USER = "sandbox"
+# Numeric non-root UID:GID — works in any image without a passwd entry. Applies to
+# dependency services and the compile-level default; the executor runs the app
+# container as root when it copies the repo in via `docker build` (ADR-0013).
+_NON_ROOT_USER = "1000:1000"
 
 
 def default_security() -> dict:

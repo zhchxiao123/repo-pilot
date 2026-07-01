@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from repo_pilot.compose import render_compose, with_repo_mount
+from repo_pilot.compose import render_compose, with_repo_build
 
 
 def http_fetch(
@@ -160,10 +160,14 @@ def _run_compose(
         )
 
 
+_PROBE_IMAGE = "curlimages/curl:latest"
+
+
 class _DockerSandbox:
     def __init__(
         self,
         compose_cmd: list[str],
+        docker_cmd: list[str],
         project: str,
         compose_file: Path,
         workdir: Path,
@@ -171,6 +175,7 @@ class _DockerSandbox:
         startup_log: str,
     ):
         self._compose_cmd = compose_cmd
+        self._docker_cmd = docker_cmd
         self._project = project
         self._compose_file = compose_file
         self._workdir = workdir
@@ -192,12 +197,33 @@ class _DockerSandbox:
         return (self._startup_log + result.stdout + result.stderr).strip()
 
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
-        return http_status(host_port, path, timeout=timeout)
+        return self.fetch(host_port, path, timeout=timeout)[0]
 
     def fetch(
         self, host_port: int, path: str, timeout: float = 3.0
     ) -> tuple[int | None, str | None]:
-        return http_fetch(host_port, path, timeout=timeout)
+        # Probe from a throwaway container on the daemon's host network: published
+        # ports live in the daemon's network namespace, not necessarily on our
+        # localhost (true under rootless / VM-backed daemons). Works universally.
+        url = f"http://127.0.0.1:{host_port}{path}"
+        try:
+            result = subprocess.run(
+                [
+                    *self._docker_cmd, "run", "--rm", "--network", "host", _PROBE_IMAGE,
+                    "-s", "-m", str(int(timeout) or 1), "-w", "\n%{http_code}", url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout + 60,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # unreachable / probe couldn't run — callers expect None, not a raise
+            return None, None
+        if result.returncode != 0 and not result.stdout:
+            return None, None
+        body, _, code = result.stdout.rpartition("\n")
+        status = int(code) if code.isdigit() and code != "000" else None
+        return status, (body or None)
 
     def stop(self) -> None:
         self._compose("down", "-v", "--remove-orphans")
@@ -216,10 +242,34 @@ class DockerSandboxExecutor:
             env = os.environ.get("REPO_PILOT_COMPOSE_CMD")
             compose_cmd = env.split() if env else ["docker", "compose"]
         self._compose_cmd = compose_cmd
+        # the plain docker command (compose without the trailing "compose" verb),
+        # used for one-off probe containers
+        self._docker_cmd = (
+            compose_cmd[:-1] if compose_cmd and compose_cmd[-1] == "compose"
+            else ["docker"]
+        )
 
     def start(self, compose: dict, repo_dir: str | None = None) -> RunningSandbox:
+        build = repo_dir is not None
         if repo_dir is not None:
-            compose = with_repo_mount(compose, repo_dir)
+            app_spec = compose.get("services", {}).get("app", {})
+            image = app_spec.get("image", "debian:stable-slim")
+            app_workdir = app_spec.get("working_dir", "/workspace/repo")
+            dockerfile = "Dockerfile.repopilot"
+            # Copy the repo into the image (streamed over the API — no shared FS
+            # needed, unlike bind mounts). Runs as root in the hardened container
+            # (cap_drop ALL + no-new-privileges + limits) so it can write its own
+            # layer; HOME is set for tooling caches. Trade-off recorded in ADR-0007.
+            (Path(repo_dir) / dockerfile).write_text(
+                f"FROM {image}\nWORKDIR {app_workdir}\nCOPY . {app_workdir}\n"
+            )
+            compose = with_repo_build(compose, repo_dir, dockerfile)
+            app = compose.get("services", {}).get("app")
+            if app is not None:
+                app["user"] = "0:0"
+                env = app.setdefault("environment", {})
+                if isinstance(env, dict):
+                    env.setdefault("HOME", "/tmp")
 
         workdir = Path(tempfile.mkdtemp(prefix="repo-pilot-"))
         compose_file = workdir / "compose.generated.yaml"
@@ -227,9 +277,8 @@ class DockerSandboxExecutor:
         project = "rp_" + uuid.uuid4().hex[:12]
         base = ["-p", project, "-f", str(compose_file)]
 
-        up = _run_compose(
-            self._compose_cmd, workdir, [*base, "up", "-d"], timeout=_UP_TIMEOUT
-        )
+        up_args = [*base, "up", "-d"] + (["--build"] if build else [])
+        up = _run_compose(self._compose_cmd, workdir, up_args, timeout=_UP_TIMEOUT)
         startup_log = up.stdout + up.stderr
 
         ports: dict[int, int] = {}
@@ -247,5 +296,11 @@ class DockerSandboxExecutor:
                     ports[target] = int(host)
 
         return _DockerSandbox(
-            self._compose_cmd, project, compose_file, workdir, ports, startup_log
+            self._compose_cmd,
+            self._docker_cmd,
+            project,
+            compose_file,
+            workdir,
+            ports,
+            startup_log,
         )
