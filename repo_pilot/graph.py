@@ -30,6 +30,7 @@ from repo_pilot.extractors import extract_signals
 from repo_pilot.healthcheck import run_healthcheck
 from repo_pilot.planner import plan
 from repo_pilot.report import render_report
+from repo_pilot.smoke import generate_smoke_tests, run_smoke_tests
 from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
 MACRO_PHASES = ["clone", "profile", "plan", "verify", "discover", "test", "report"]
@@ -194,6 +195,17 @@ def build_graph(
             targets = []
         return {"targets": targets, "visited": ["discover"]}
 
+    def _test(state: State) -> dict:
+        sandbox = state.get("sandbox")
+        targets = state.get("targets") or []
+        if sandbox is None or not targets:
+            return {"visited": ["test"]}
+        try:
+            tests = run_smoke_tests(sandbox, generate_smoke_tests(targets))
+        except Exception:
+            tests = []
+        return {"tests": tests, "visited": ["test"]}
+
     def _report(state: State) -> dict:
         sandbox = state.get("sandbox")
         if sandbox is not None:
@@ -210,15 +222,10 @@ def build_graph(
             runbook=runbook,
             deferred_reason=state.get("deferred_reason"),
             targets=state.get("targets"),
+            tests=state.get("tests"),
         )
         Path(state["report_path"]).write_text(markdown)
         return {"report": markdown, "visited": ["report"]}
-
-    def _passthrough(name: str):
-        def node(_state: State) -> dict:
-            return {"visited": [name]}
-
-        return node
 
     graph = StateGraph(State)
     graph.add_node("clone", _clone)
@@ -226,7 +233,7 @@ def build_graph(
     graph.add_node("plan", _plan)
     graph.add_node("verify", _verify)
     graph.add_node("discover", _discover)
-    graph.add_node("test", _passthrough("test"))
+    graph.add_node("test", _test)
     graph.add_node("report", _report)
 
     graph.add_edge(START, "clone")
