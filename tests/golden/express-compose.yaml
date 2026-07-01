@@ -1,0 +1,10 @@
+services:
+  app:
+    command:
+    - sh
+    - -c
+    - npm install && npm start
+    image: node:20-bookworm
+    ports:
+    - target: 3000
+    working_dir: /workspace/repo
