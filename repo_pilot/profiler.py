@@ -36,9 +36,11 @@ def _detect_package_manager(repo_dir: Path) -> tuple[str, str, bool]:
     return "npm", "package.json", False
 
 
-def profile(repo_dir: str | Path) -> tuple[dict, list[dict]]:
+def profile(
+    repo_dir: str | Path, builder: EvidenceBuilder | None = None
+) -> tuple[dict, list[dict]]:
     repo_dir = Path(repo_dir)
-    ev = EvidenceBuilder()
+    ev = builder if builder is not None else EvidenceBuilder()
 
     languages: list[str] = []
     package_managers: list[str] = []

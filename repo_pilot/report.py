@@ -10,7 +10,12 @@ from __future__ import annotations
 from repo_pilot.cloner import RepoRef
 
 
-def render_report(repo_url: str, repo_ref: RepoRef, runbook: dict | None = None) -> str:
+def render_report(
+    repo_url: str,
+    repo_ref: RepoRef,
+    runbook: dict | None = None,
+    deferred_reason: str | None = None,
+) -> str:
     lines = [
         "# repo-pilot report",
         "",
@@ -22,21 +27,33 @@ def render_report(repo_url: str, repo_ref: RepoRef, runbook: dict | None = None)
         "",
     ]
 
-    if runbook is not None:
+    if runbook is None:
         lines += ["## Runtime", ""]
-        if runbook.get("status") == "verified":
-            hc = runbook.get("verification", {}).get("healthcheck_result", {})
-            lines.append("- Status: verified")
-            lines.append(f"- Healthcheck: {hc.get('status_code')} at {hc.get('url')}")
-            reproduce = runbook.get("verification", {}).get("reproduce", [])
-            if reproduce:
-                lines += ["", "### Reproduce", "", "```", *reproduce, "```"]
+        if deferred_reason:
+            lines.append(f"- Status: deferred ({deferred_reason})")
         else:
-            lines.append("- Status: not verified (failed)")
-            logs = runbook.get("verification", {}).get("logs_summary")
-            if logs:
-                excerpt = "\n".join(logs.strip().splitlines()[-20:])
-                lines += ["", "### Logs", "", "```", excerpt, "```"]
+            lines.append("- Status: no runnable candidate found")
         lines.append("")
+        return "\n".join(lines)
+
+    lines += ["## Runtime", ""]
+    if "confidence" in runbook:
+        lines.append(
+            f"- Candidate: {runbook.get('id')} (confidence {runbook['confidence']:.2f})"
+        )
+    if runbook.get("status") == "verified":
+        hc = runbook.get("verification", {}).get("healthcheck_result", {})
+        lines.append("- Status: verified")
+        lines.append(f"- Healthcheck: {hc.get('status_code')} at {hc.get('url')}")
+        reproduce = runbook.get("verification", {}).get("reproduce", [])
+        if reproduce:
+            lines += ["", "### Reproduce", "", "```", *reproduce, "```"]
+    else:
+        lines.append("- Status: not verified (failed)")
+        logs = runbook.get("verification", {}).get("logs_summary")
+        if logs:
+            excerpt = "\n".join(logs.strip().splitlines()[-20:])
+            lines += ["", "### Logs", "", "```", excerpt, "```"]
+    lines.append("")
 
     return "\n".join(lines)

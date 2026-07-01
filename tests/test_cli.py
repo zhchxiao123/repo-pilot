@@ -10,8 +10,11 @@ from click.testing import CliRunner
 from repo_pilot.cli import main
 
 
-def test_run_creates_job_and_surfaces_docker_unavailable(tmp_path, git_origin, monkeypatch):
-    origin, _first, _second = git_origin
+def test_run_creates_job_and_surfaces_docker_unavailable(
+    tmp_path, git_repo_from, fixture_repo, monkeypatch
+):
+    # an Express repo plans a real candidate, so verify reaches the executor
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
     art = tmp_path / "art"
     # point the executor at a non-existent compose command -> DockerUnavailable
     monkeypatch.setenv("REPO_PILOT_COMPOSE_CMD", "repo-pilot-no-such-docker")

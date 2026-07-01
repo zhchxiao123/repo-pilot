@@ -16,6 +16,7 @@ For a candidate backed by evidence items grouped into **distinct kinds** K:
    | compose_service / dockerfile / devcontainer | 0.80 |
    | readme_command | 0.70 |
    | package_script | 0.65 |
+   | package_manager | 0.65 |
    | manifest_dependency | 0.60 |
    | entrypoint_inference | 0.45 |
    | llm_inference | 0.30 |
