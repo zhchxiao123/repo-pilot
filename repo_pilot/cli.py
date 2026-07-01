@@ -12,6 +12,7 @@ from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
 from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 from repo_pilot.graph import build_graph, initial_state
+from repo_pilot.security import default_security
 
 
 @click.group()
@@ -28,11 +29,30 @@ def main() -> None:
     default=None,
     help="Directory to write per-job artifacts under (overrides config).",
 )
-def run(repo_url: str, commit: str | None, artifacts_root: str | None) -> None:
+@click.option("--allow-private-egress", is_flag=True, help="Allow egress to private networks.")
+@click.option("--allow-metadata", is_flag=True, help="Allow egress to the cloud metadata endpoint.")
+@click.option("--no-isolation", is_flag=True, help="Disable network isolation entirely.")
+def run(
+    repo_url: str,
+    commit: str | None,
+    artifacts_root: str | None,
+    allow_private_egress: bool,
+    allow_metadata: bool,
+    no_isolation: bool,
+) -> None:
     """Analyze, verify, and test REPO_URL, writing artifacts for the job."""
     config = load_config()
     root = artifacts_root or config.artifacts_root
     job = ArtifactStore(root).create_job()
+
+    # Default-safe security envelope; opt-out via flags (ADR-0007).
+    security = default_security()
+    if allow_private_egress:
+        security["egress"] = "allow_private"
+    if allow_metadata:
+        security["allow_metadata"] = True
+    if no_isolation:
+        security["isolation"] = False
 
     click.echo(f"Job: {job.job_id}")
     click.echo(f"Repo: {repo_url}" + (f" @ {commit}" if commit else ""))
@@ -40,7 +60,10 @@ def run(repo_url: str, commit: str | None, artifacts_root: str | None) -> None:
     # Real sandbox: run the generated compose against the local Docker daemon,
     # waiting up to ~120s for the app to become healthy (ADR-0002).
     graph = build_graph(
-        DockerSandboxExecutor(), healthcheck_retries=60, poll_interval=2.0
+        DockerSandboxExecutor(),
+        security=security,
+        healthcheck_retries=60,
+        poll_interval=2.0,
     )
     try:
         final = graph.invoke(

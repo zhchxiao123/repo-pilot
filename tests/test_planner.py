@@ -37,6 +37,13 @@ def test_candidate_validates_against_runbook_schema(fixture_repo):
     validate_runbook(plan(prof, evidence).candidates[0])
 
 
+def test_candidate_declares_resource_limits_and_timeout(fixture_repo):
+    prof, evidence = _profiled(fixture_repo, "express-min")
+    resources = plan(prof, evidence).candidates[0]["runtime"]["resources"]
+    assert resources["timeout_seconds"] > 0
+    assert resources["memory"] and resources["pids"] and resources["cpu"]
+
+
 def test_candidates_ranked_by_confidence_desc(fixture_repo):
     prof, evidence = _profiled(fixture_repo, "express-min")
     scores = [c["confidence"] for c in plan(prof, evidence).candidates]

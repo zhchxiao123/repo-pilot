@@ -30,6 +30,7 @@ from repo_pilot.extractors import extract_signals
 from repo_pilot.healthcheck import run_healthcheck
 from repo_pilot.planner import plan
 from repo_pilot.report import render_report
+from repo_pilot.security import default_security, dummy_env, redact
 from repo_pilot.smoke import generate_smoke_tests, run_smoke_tests
 from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
@@ -96,10 +97,12 @@ def _reproduce(repo_url: str, runbook: dict) -> list[str]:
 def build_graph(
     executor: SandboxExecutor,
     *,
+    security: dict | None = None,
     healthcheck_retries: int = 0,
     poll_interval: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
 ):
+    sec = security if security is not None else default_security()
     def _clone(state: State) -> dict:
         ref = RepoCloner().clone(
             state["repo_url"], commit=state.get("commit"), dest=state["repo_dir"]
@@ -124,9 +127,14 @@ def build_graph(
 
     def _plan(state: State) -> dict:
         result = plan(state["profile"], state["evidence"])
-        if result.candidates:
-            return {"runbook": result.candidates[0], "visited": ["plan"]}
-        return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
+        if not result.candidates:
+            return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
+        runbook = result.candidates[0]
+        runbook["security"] = dict(sec)
+        env = dummy_env(state["repo_dir"])  # dummy values only — never real secrets
+        if env:
+            runbook["env"] = {"generated": env}
+        return {"runbook": runbook, "visited": ["plan"]}
 
     def _verify(state: State) -> dict:
         if state.get("runbook") is None:
@@ -145,7 +153,7 @@ def build_graph(
             sleep=sleep,
         )
         ports = dict(sandbox.ports)
-        logs = sandbox.logs
+        logs = redact(sandbox.logs)  # scrub secrets before anything is stored (§20.2)
 
         attempt = {"healthcheck_passed": result.passed, "logs_summary": logs}
         if result.passed:
