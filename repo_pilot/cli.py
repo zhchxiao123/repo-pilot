@@ -12,6 +12,7 @@ from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
 from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 from repo_pilot.graph import build_graph, initial_state
+from repo_pilot.model_client import build_model_client
 from repo_pilot.security import default_security
 
 
@@ -32,6 +33,7 @@ def main() -> None:
 @click.option("--allow-private-egress", is_flag=True, help="Allow egress to private networks.")
 @click.option("--allow-metadata", is_flag=True, help="Allow egress to the cloud metadata endpoint.")
 @click.option("--no-isolation", is_flag=True, help="Disable network isolation entirely.")
+@click.option("--no-llm", is_flag=True, help="Disable the LLM fallback seam.")
 def run(
     repo_url: str,
     commit: str | None,
@@ -39,6 +41,7 @@ def run(
     allow_private_egress: bool,
     allow_metadata: bool,
     no_isolation: bool,
+    no_llm: bool,
 ) -> None:
     """Analyze, verify, and test REPO_URL, writing artifacts for the job."""
     config = load_config()
@@ -54,6 +57,16 @@ def run(
     if no_isolation:
         security["isolation"] = False
 
+    # Provider-agnostic LLM fallback (ADR-0005), gated: only fires when
+    # deterministic planning finds nothing. Degrades to deterministic-only if the
+    # provider backend can't be built (missing package/config).
+    model_client = None
+    if not no_llm:
+        try:
+            model_client = build_model_client(config)
+        except Exception as exc:  # missing provider package, bad config, etc.
+            click.echo(f"LLM fallback disabled ({exc}); continuing deterministically.")
+
     click.echo(f"Job: {job.job_id}")
     click.echo(f"Repo: {repo_url}" + (f" @ {commit}" if commit else ""))
 
@@ -62,6 +75,7 @@ def run(
     graph = build_graph(
         DockerSandboxExecutor(),
         security=security,
+        model_client=model_client,
         healthcheck_retries=60,
         poll_interval=2.0,
     )

@@ -29,6 +29,16 @@ LangGraph.
 - **Structured output** on every seam: schema-constrained, validated at the tool
   boundary, retry-on-mismatch.
 
+## Realization (2026-07-02)
+
+The provider-agnostic client is implemented via LangChain `init_chat_model`
+(`LangChainModelClient`): `REPO_PILOT_MODEL_PROVIDER` + `REPO_PILOT_MODEL_ID`
+(+temperature/max_tokens) select any supported provider with no code change; the
+default `anthropic` (`claude-opus-4-8`) ships in core, others via extras. The CLI
+builds the client and passes it to the graph; the seam is gated (fires only when
+deterministic planning finds nothing) and degrades to deterministic-only if no key
+/ provider package is available. `ReplayModelClient` keeps it token-free in tests.
+
 ## Consequences
 
 - Model swap is a config change, not a code change — satisfies the portability
