@@ -3,6 +3,14 @@
 from repo_pilot.executor import FakeSandboxExecutor
 from repo_pilot.healthcheck import run_healthcheck
 
+
+def test_fake_executor_start_accepts_and_ignores_repo_dir():
+    # the seam signature is start(compose, repo_dir=None); the fake ignores it
+    sandbox = FakeSandboxExecutor(ports={3000: 1}, responses={"/": 200}).start(
+        {"services": {}}, repo_dir="/some/clone"
+    )
+    assert sandbox.ports == {3000: 1}
+
 SPEC = {
     "strategy": "http",
     "url_candidates": ["/health", "/"],

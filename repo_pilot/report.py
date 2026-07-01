@@ -33,6 +33,10 @@ def render_report(repo_url: str, repo_ref: RepoRef, runbook: dict | None = None)
                 lines += ["", "### Reproduce", "", "```", *reproduce, "```"]
         else:
             lines.append("- Status: not verified (failed)")
+            logs = runbook.get("verification", {}).get("logs_summary")
+            if logs:
+                excerpt = "\n".join(logs.strip().splitlines()[-20:])
+                lines += ["", "### Logs", "", "```", excerpt, "```"]
         lines.append("")
 
     return "\n".join(lines)

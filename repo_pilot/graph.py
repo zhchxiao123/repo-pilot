@@ -12,8 +12,9 @@ State is the thin, typed Runbook-spine plus a ``visited`` execution trace.
 from __future__ import annotations
 
 import operator
+import time
 from pathlib import Path
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Callable, TypedDict
 
 import yaml
 from langgraph.graph import END, START, StateGraph
@@ -93,10 +94,17 @@ def _hardcoded_runbook(repo_url: str, repo_ref: RepoRef) -> dict:
 
 
 def _reproduce(repo_url: str, runbook: dict) -> list[str]:
-    return [f"git clone {repo_url}", "cd repo", *iter_step_commands(runbook)]
+    # Clone into an explicit `repo` dir so the following `cd repo` is correct.
+    return [f"git clone {repo_url} repo", "cd repo", *iter_step_commands(runbook)]
 
 
-def build_graph(executor: SandboxExecutor):
+def build_graph(
+    executor: SandboxExecutor,
+    *,
+    healthcheck_retries: int = 0,
+    poll_interval: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
+):
     def _clone(state: State) -> dict:
         ref = RepoCloner().clone(
             state["repo_url"], commit=state.get("commit"), dest=state["repo_dir"]
@@ -109,9 +117,17 @@ def build_graph(executor: SandboxExecutor):
 
     def _verify(state: State) -> dict:
         runbook = dict(state["runbook"])
-        sandbox = executor.start(compile_compose(runbook))
+        sandbox = executor.start(
+            compile_compose(runbook), repo_dir=str(state["repo_ref"].repo_dir)
+        )
         try:
-            result = run_healthcheck(sandbox, runbook.get("healthcheck", {}))
+            result = run_healthcheck(
+                sandbox,
+                runbook.get("healthcheck", {}),
+                retries=healthcheck_retries,
+                poll_interval=poll_interval,
+                sleep=sleep,
+            )
             ports = dict(sandbox.ports)
             logs = sandbox.logs
         finally:
@@ -132,6 +148,11 @@ def build_graph(executor: SandboxExecutor):
             }
         else:
             runbook["status"] = "failed"
+            runbook["verification"] = {
+                "healthcheck_result": {"passed": False},
+                "logs_summary": logs,
+                "ports": [{"container": c, "host": h} for c, h in ports.items()],
+            }
 
         return {
             "runbook": runbook,

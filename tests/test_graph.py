@@ -60,16 +60,19 @@ def test_verified_runbook_is_persisted_and_schema_valid(tmp_path, git_origin):
     validate_runbook(data)  # conforms to the Runbook schema (ADR-0010)
 
 
-def test_verify_failure_yields_failure_report(tmp_path, git_origin):
+def test_verify_failure_yields_failure_report_with_logs(tmp_path, git_origin):
     origin, _first, _second = git_origin
-    # executor answers nothing acceptable -> healthcheck fails
-    failing = FakeSandboxExecutor(ports={3000: 49152}, responses={"/": 500})
+    # executor answers nothing acceptable -> healthcheck fails; logs are captured
+    failing = FakeSandboxExecutor(
+        ports={3000: 49152}, responses={"/": 500}, logs="npm ERR! boom"
+    )
     final = _run(failing, tmp_path, origin)
 
     assert final["verified"] is False
     assert final["runbook"]["status"] == "failed"
-    report = (tmp_path / "report.md").read_text().lower()
-    assert "not verified" in report or "failed" in report
+    report = (tmp_path / "report.md").read_text()
+    assert "not verified" in report.lower()
+    assert "boom" in report  # captured logs surfaced in the failure report
 
 
 def test_macro_phases_are_the_documented_dag():

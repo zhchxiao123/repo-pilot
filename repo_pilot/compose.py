@@ -7,6 +7,7 @@ resource limits, egress) is layered on in a later slice (ADR-0007).
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import yaml
@@ -61,3 +62,18 @@ def compile_compose(runbook: dict) -> dict:
 
 def render_compose(compose: dict) -> str:
     return yaml.safe_dump(compose, default_flow_style=False, sort_keys=True)
+
+
+def with_repo_mount(compose: dict, repo_dir: str) -> dict:
+    """Return a copy of ``compose`` with the cloned repo bind-mounted into the app.
+
+    The host path is a runtime binding, so it is applied here rather than baked into
+    the pure Runbook->compose lowering (ADR-0003). No-op if there is no app service
+    with a working_dir.
+    """
+    app = compose.get("services", {}).get("app")
+    if not app or "working_dir" not in app:
+        return compose
+    result = copy.deepcopy(compose)
+    result["services"]["app"]["volumes"] = [f"{repo_dir}:{app['working_dir']}"]
+    return result
