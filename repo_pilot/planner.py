@@ -21,6 +21,15 @@ NEEDS_COMPOSE = "needs-compose"
 _CORROBORATING_KINDS = ("readme_command", "ci_step")
 
 
+def default_healthcheck() -> dict:
+    """A fresh default HTTP healthcheck spec (§24.2)."""
+    return {
+        "strategy": "http",
+        "url_candidates": ["/health", "/api/health", "/"],
+        "acceptable_status": [200, 204, 301, 302, 404],
+    }
+
+
 @dataclass
 class PlanResult:
     candidates: list[dict] = field(default_factory=list)
@@ -101,11 +110,7 @@ def plan(profile: dict, evidence: list[dict]) -> PlanResult:
                     "setup": _install_steps(manager),
                     "start": [{"command": command, "expected_ports": [port]}],
                 },
-                "healthcheck": {
-                    "strategy": "http",
-                    "url_candidates": ["/health", "/api/health", "/"],
-                    "acceptable_status": [200, 204, 301, 302, 404],
-                },
+                "healthcheck": default_healthcheck(),
             }
         )
 
