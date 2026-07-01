@@ -25,6 +25,14 @@ def test_compile_matches_golden_for_express_runbook():
     assert render_compose(compose) == GOLDEN.read_text()
 
 
+def test_app_service_is_hardened_non_root_with_limits():
+    app = compile_compose(EXPRESS_RUNBOOK)["services"]["app"]
+    assert app["user"] == "sandbox"
+    assert app["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in app["security_opt"]
+    assert app["mem_limit"] and app["pids_limit"] and app["cpus"]
+
+
 def test_compiled_compose_declares_dependency_services():
     runbook = {
         **EXPRESS_RUNBOOK,

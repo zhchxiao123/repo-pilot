@@ -13,8 +13,8 @@ from repo_pilot.graph import MACRO_PHASES, build_graph, initial_state
 from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
 
-def _run(executor, tmp_path, origin):
-    graph = build_graph(executor)
+def _run(executor, tmp_path, origin, **build_kwargs):
+    graph = build_graph(executor, **build_kwargs)
     return graph.invoke(
         initial_state(
             repo_url=str(origin),
@@ -150,6 +150,40 @@ def test_compose_only_repo_yields_deferred_report(tmp_path, git_repo_from):
     assert final.get("runbook") is None
     assert final["deferred_reason"] == "needs-compose"
     assert "deferred" in (tmp_path / "report.md").read_text().lower()
+
+
+def test_runbook_carries_injected_security(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    relaxed = {"egress": "allow_private", "allow_metadata": True, "isolation": False}
+    final = _run(_success_executor(), tmp_path, origin, security=relaxed)
+    assert final["runbook"]["security"] == relaxed
+
+
+def test_runbook_env_generated_from_env_example(tmp_path, git_repo_from, fixture_repo):
+    import shutil
+
+    src = tmp_path / "withenv"
+    shutil.copytree(fixture_repo("express-min"), src)
+    (src / ".env.example").write_text("DATABASE_URL=\nLOG_LEVEL=info\n")
+    origin, _commit = git_repo_from(src)
+
+    final = _run(_success_executor(), tmp_path, origin)
+    generated = final["runbook"]["env"]["generated"]
+    assert set(generated) == {"DATABASE_URL", "LOG_LEVEL"}
+    assert all(v == "dummy" for v in generated.values())  # never real secrets
+
+
+def test_logs_are_redacted_in_the_report(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    failing = FakeSandboxExecutor(
+        ports={3000: 49152},
+        responses={"/health": 500, "/api/health": 500, "/": 500},
+        logs="db password=hunter2 during boot",
+    )
+    _run(failing, tmp_path, origin)
+    report = (tmp_path / "report.md").read_text()
+    assert "hunter2" not in report
+    assert "REDACTED" in report
 
 
 def test_macro_phases_are_the_documented_dag():

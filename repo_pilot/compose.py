@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from repo_pilot.security import service_hardening
+
 _STEP_PHASES = ("setup", "build", "migrate", "start")
 
 
@@ -24,11 +26,16 @@ def iter_step_commands(runbook: dict) -> list[str]:
 def compile_compose(runbook: dict) -> dict:
     steps = runbook.get("steps", {})
     commands = iter_step_commands(runbook)
+    resources = runbook.get("runtime", {}).get("resources")
+    hardening = service_hardening(resources)
+    # dependency services keep their image's own user (e.g. postgres)
+    dep_hardening = {k: v for k, v in hardening.items() if k != "user"}
 
     app: dict[str, Any] = {
         "image": runbook["runtime"]["image"],
         "working_dir": runbook["runtime"]["workdir"],
         "command": ["sh", "-c", " && ".join(commands)],
+        **hardening,
     }
 
     ports = [
@@ -49,7 +56,7 @@ def compile_compose(runbook: dict) -> dict:
 
     services: dict[str, Any] = {"app": app}
     for svc in dependency_services:
-        compiled: dict[str, Any] = {"image": svc["image"]}
+        compiled: dict[str, Any] = {"image": svc["image"], **dep_hardening}
         if svc.get("env"):
             compiled["environment"] = dict(svc["env"])
         svc_ports = [{"target": p["container"]} for p in svc.get("ports", [])]

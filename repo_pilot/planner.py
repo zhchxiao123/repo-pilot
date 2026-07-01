@@ -87,7 +87,16 @@ def plan(profile: dict, evidence: list[dict]) -> PlanResult:
                 "confidence": confidence(kinds),
                 "evidence_refs": refs,
                 "repo": profile["repo"],
-                "runtime": {"image": "node:20-bookworm", "workdir": "/workspace/repo"},
+                "runtime": {
+                    "image": "node:20-bookworm",
+                    "workdir": "/workspace/repo",
+                    "resources": {
+                        "cpu": 2,
+                        "memory": "4g",
+                        "pids": 512,
+                        "timeout_seconds": 900,
+                    },
+                },
                 "steps": {
                     "setup": _install_steps(manager),
                     "start": [{"command": command, "expected_ports": [port]}],
