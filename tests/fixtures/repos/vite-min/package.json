@@ -1,0 +1,11 @@
+{
+  "name": "vite-min",
+  "version": "1.0.0",
+  "description": "Minimal Vite app fixture for repo-pilot.",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
