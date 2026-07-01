@@ -10,6 +10,7 @@ import click
 
 from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
+from repo_pilot.graph import build_graph, initial_state
 
 
 @click.group()
@@ -33,8 +34,19 @@ def run(repo_url: str, commit: str | None, artifacts_root: str | None) -> None:
     job = ArtifactStore(root).create_job()
 
     click.echo(f"Job: {job.job_id}")
-    click.echo(f"Artifacts: {job.dir}")
     click.echo(f"Repo: {repo_url}" + (f" @ {commit}" if commit else ""))
+
+    graph = build_graph()
+    graph.invoke(
+        initial_state(
+            repo_url=repo_url,
+            commit=commit,
+            repo_dir=str(job.dir / "repo"),
+            report_path=str(job.report_path),
+        )
+    )
+
+    click.echo(f"Report: {job.report_path}")
 
 
 if __name__ == "__main__":
