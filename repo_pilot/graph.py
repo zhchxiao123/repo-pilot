@@ -31,6 +31,7 @@ from repo_pilot.healthcheck import run_healthcheck
 from repo_pilot.llm_planner import gather_context, propose_runbooks
 from repo_pilot.model_client import ModelClient
 from repo_pilot.planner import plan
+from repo_pilot.repair import patch_fingerprint, propose_repair
 from repo_pilot.report import render_report
 from repo_pilot.security import default_security, dummy_env, redact
 from repo_pilot.smoke import generate_smoke_tests, run_smoke_tests
@@ -57,6 +58,12 @@ class State(TypedDict, total=False):
     attempts: list
     verified: bool
     sandbox: Any
+    # repair loop (ADR-0012)
+    last_logs: str
+    repair_attempts: int
+    tried_patches: list
+    repair_history: list
+    repaired: bool
     targets: list
     tests: list
     report: str
@@ -101,6 +108,7 @@ def build_graph(
     *,
     security: dict | None = None,
     model_client: ModelClient | None = None,
+    max_repair_attempts: int = 3,
     healthcheck_retries: int = 0,
     poll_interval: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -222,8 +230,56 @@ def build_graph(
             "runbook": runbook,
             "verified": False,
             "attempts": [attempt],
+            "last_logs": logs,  # fed to the repair loop
             "visited": ["verify"],
         }
+
+    def _repair(state: State) -> dict:
+        # Cyclic agent step (ADR-0012): diagnose the failure and patch the Runbook,
+        # rules-first then LLM. Bounded by max_repair_attempts + no-repeat hashing;
+        # the sandbox re-verifies whatever we propose.
+        runbook = state.get("runbook")
+        if runbook is None:
+            return {"repaired": False, "visited": ["repair"]}
+        proposal = propose_repair(runbook, state.get("last_logs", ""), model_client)
+        if proposal is None:
+            return {"repaired": False, "visited": ["repair"]}
+        patched, description, source = proposal
+
+        tried = state.get("tried_patches", [])
+        fingerprint = patch_fingerprint(patched)
+        if fingerprint in tried:  # already tried this exact patch — stop looping
+            return {"repaired": False, "visited": ["repair"]}
+
+        attempt_no = state.get("repair_attempts", 0) + 1
+        history = state.get("repair_history", [])
+        entry = {
+            "attempt": attempt_no,
+            "diagnosis": description,
+            "patch": description,
+            "source": source,
+            "result": "applied; re-verifying",
+        }
+        return {
+            "runbook": _enrich(patched, state),
+            "repair_attempts": attempt_no,
+            "tried_patches": [*tried, fingerprint],
+            "repair_history": [*history, entry],
+            "repaired": True,
+            "visited": ["repair"],
+        }
+
+    def _route_after_verify(state: State) -> str:
+        if state.get("verified"):
+            return "discover"
+        if state.get("runbook") is not None and (
+            state.get("repair_attempts", 0) < max_repair_attempts
+        ):
+            return "repair"
+        return "report"
+
+    def _route_after_repair(state: State) -> str:
+        return "verify" if state.get("repaired") else "report"
 
     def _discover(state: State) -> dict:
         sandbox = state.get("sandbox")
@@ -255,6 +311,8 @@ def build_graph(
             sandbox.stop()
         runbook = state.get("runbook")
         if runbook is not None:
+            if state.get("repair_history"):
+                runbook["repair_history"] = state["repair_history"]
             validate_runbook(runbook)
             Path(state["runbook_path"]).write_text(
                 yaml.safe_dump(runbook, sort_keys=True)
@@ -275,13 +333,25 @@ def build_graph(
     graph.add_node("profile", _profile)
     graph.add_node("plan", _plan)
     graph.add_node("verify", _verify)
+    graph.add_node("repair", _repair)
     graph.add_node("discover", _discover)
     graph.add_node("test", _test)
     graph.add_node("report", _report)
 
     graph.add_edge(START, "clone")
-    for prev, nxt in zip(MACRO_PHASES, MACRO_PHASES[1:]):
-        graph.add_edge(prev, nxt)
+    graph.add_edge("clone", "profile")
+    graph.add_edge("profile", "plan")
+    graph.add_edge("plan", "verify")
+    # cyclic repair agent: verify branches to discover (ok) / repair (retry) / report
+    graph.add_conditional_edges(
+        "verify", _route_after_verify,
+        {"discover": "discover", "repair": "repair", "report": "report"},
+    )
+    graph.add_conditional_edges(
+        "repair", _route_after_repair, {"verify": "verify", "report": "report"}
+    )
+    graph.add_edge("discover", "test")
+    graph.add_edge("test", "report")
     graph.add_edge("report", END)
 
     return graph.compile()

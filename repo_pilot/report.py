@@ -58,6 +58,13 @@ def render_report(
             lines += ["", "### Logs", "", "```", excerpt, "```"]
     lines.append("")
 
+    repairs = runbook.get("repair_history") or []
+    if repairs:
+        lines += ["## Repair attempts", ""]
+        for r in repairs:
+            lines.append(f"- attempt {r['attempt']} ({r['source']}): {r['diagnosis']}")
+        lines.append("")
+
     if targets:
         lines += ["## Test targets", ""]
         for t in targets:
