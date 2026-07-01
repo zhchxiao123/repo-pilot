@@ -188,35 +188,42 @@ def test_logs_are_redacted_in_the_report(tmp_path, git_repo_from, fixture_repo):
     assert "REDACTED" in report
 
 
-def test_nl_fallback_produces_candidate_when_no_deterministic(
-    tmp_path, git_repo_from, fixture_repo
-):
-    origin, _commit = git_repo_from(fixture_repo("readme-only"))
-    client = ReplayModelClient(
-        [json.dumps(["pip install -r requirements.txt", "python app.py"])]
-    )
+def test_llm_planning_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
+    # a Flask app: no package.json, so deterministic planning finds nothing.
+    origin, _commit = git_repo_from(fixture_repo("flask-min"))
+    client = ReplayModelClient([
+        json.dumps([
+            {
+                "image": "python:3.11-bookworm",
+                "setup": ["pip install -r requirements.txt"],
+                "start": "python app.py",
+                "port": 8000,
+            }
+        ])
+    ])
     ex = FakeSandboxExecutor(
         ports={8000: 49000}, responses={"/": 200, "/health": 200, "/api/health": 200}
     )
     final = _run(ex, tmp_path, origin, model_client=client)
 
     rb = final["runbook"]
-    assert rb["id"] == "nl_readme"
+    assert rb["id"].startswith("llm_")
+    assert rb["runtime"]["image"] == "python:3.11-bookworm"
     assert rb["steps"]["start"][0]["command"] == "python app.py"
     assert rb["confidence"] == pytest.approx(0.30)
     assert client.calls  # the model was consulted
     assert final["verified"] is True  # subordination: sandbox still adjudicates
 
 
-def test_nl_fallback_not_used_when_deterministic_candidate_exists(
+def test_llm_planning_not_used_when_deterministic_candidate_exists(
     tmp_path, git_repo_from, fixture_repo
 ):
     origin, _commit = git_repo_from(fixture_repo("express-min"))
-    client = ReplayModelClient([json.dumps(["should not run"])])
+    client = ReplayModelClient([json.dumps([{"image": "x", "start": "y", "port": 1}])])
     final = _run(_success_executor(), tmp_path, origin, model_client=client)
 
     assert final["runbook"]["id"].startswith("node_")
-    assert client.calls == []  # the NL seam never fired
+    assert client.calls == []  # the LLM seam never fired
 
 
 def test_macro_phases_are_the_documented_dag():

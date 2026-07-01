@@ -27,11 +27,10 @@ from repo_pilot.discovery import discover_targets
 from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
 from repo_pilot.extractors import extract_signals
-from repo_pilot.confidence import confidence
 from repo_pilot.healthcheck import run_healthcheck
+from repo_pilot.llm_planner import gather_context, propose_runbooks
 from repo_pilot.model_client import ModelClient
-from repo_pilot.nl_extract import nl_extract_commands
-from repo_pilot.planner import default_healthcheck, plan
+from repo_pilot.planner import plan
 from repo_pilot.report import render_report
 from repo_pilot.security import default_security, dummy_env, redact
 from repo_pilot.smoke import generate_smoke_tests, run_smoke_tests
@@ -97,36 +96,6 @@ def _reproduce(repo_url: str, runbook: dict) -> list[str]:
     return [f"git clone {repo_url} repo", "cd repo", *iter_step_commands(runbook)]
 
 
-def _nl_runbook(repo: dict, commands: list[str], ev_id: str) -> dict:
-    """Build a low-confidence candidate from NL-extracted commands (Tier-B)."""
-    tool = commands[0].split(" ", 1)[0]
-    if tool in ("python", "pip", "uv", "flask", "uvicorn", "django-admin"):
-        image = "python:3.11-bookworm"
-    elif tool in ("node", "npm", "pnpm", "yarn"):
-        image = "node:20-bookworm"
-    else:
-        image = "debian:stable-slim"
-    setup = [{"command": c} for c in commands[:-1]]
-    return {
-        "schema_version": "v1",
-        "id": "nl_readme",
-        "status": "candidate",
-        "confidence": confidence(["llm_inference"]),
-        "evidence_refs": [ev_id],
-        "repo": repo,
-        "runtime": {
-            "image": image,
-            "workdir": "/workspace/repo",
-            "resources": {"cpu": 2, "memory": "4g", "pids": 512, "timeout_seconds": 900},
-        },
-        "steps": {
-            "setup": setup,
-            "start": [{"command": commands[-1], "expected_ports": [8000]}],
-        },
-        "healthcheck": default_healthcheck(),
-    }
-
-
 def build_graph(
     executor: SandboxExecutor,
     *,
@@ -169,36 +138,33 @@ def build_graph(
     def _plan(state: State) -> dict:
         result = plan(state["profile"], state["evidence"])
         if result.candidates:
-            # deterministic candidate wins; the NL seam does not fire
+            # deterministic candidate wins; the LLM seam does not fire
             return {"runbook": _enrich(result.candidates[0], state), "visited": ["plan"]}
         if result.deferred_reason:
+            # e.g. compose-only repo — deferred, not LLM-guessed (ADR-0002)
             return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
 
-        # Tier-B gated fallback: only when deterministic planning found nothing.
-        # A model error (e.g. missing API key) degrades to no candidate, never a crash.
-        readme = Path(state["repo_dir"]) / "README.md"
-        if model_client is not None and readme.is_file():
+        # Tier-B gated LLM planning: only when deterministic rules found no
+        # candidate (e.g. a non-Node / unconventional stack). The LLM proposes full
+        # Runbook candidates from profile + evidence + files; the sandbox still
+        # verifies them. A model error (e.g. missing API key) degrades to no
+        # candidate, never a crash.
+        if model_client is not None:
             try:
-                commands = nl_extract_commands(readme.read_text(), model_client)
+                context = gather_context(state["repo_dir"])
+                llm_candidates, llm_evidence = propose_runbooks(
+                    state["profile"], state["evidence"], context, model_client
+                )
             except Exception:
-                commands = []
-            if commands:
-                ev_id = "ev_nl1"
-                ev = {
-                    "id": ev_id,
-                    "file": "README.md",
-                    "line": None,
-                    "kind": "llm_inference",
-                    "excerpt": "; ".join(commands),
-                    "reason": "run commands extracted from README prose",
-                    "confidence": 0.3,
-                }
-                validate_evidence(ev)
-                evidence = [*state["evidence"], ev]
+                llm_candidates, llm_evidence = [], []
+            if llm_candidates:
+                evidence = [*state["evidence"], *llm_evidence]
+                for item in llm_evidence:
+                    validate_evidence(item)
                 write_evidence(state["evidence_path"], evidence)
-                runbook = _nl_runbook(state["profile"]["repo"], commands, ev_id)
+                best = max(llm_candidates, key=lambda c: c["confidence"])
                 return {
-                    "runbook": _enrich(runbook, state),
+                    "runbook": _enrich(best, state),
                     "evidence": evidence,
                     "visited": ["plan"],
                 }
