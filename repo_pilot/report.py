@@ -16,6 +16,7 @@ def render_report(
     runbook: dict | None = None,
     deferred_reason: str | None = None,
     targets: list[dict] | None = None,
+    tests: list[dict] | None = None,
 ) -> str:
     lines = [
         "# repo-pilot report",
@@ -61,6 +62,16 @@ def render_report(
         lines += ["## Test targets", ""]
         for t in targets:
             lines.append(f"- {t['method']} {t['path']} ({t['source']})")
+        lines.append("")
+
+    if tests:
+        passed = sum(1 for t in tests if t["status"] == "passed")
+        lines += ["## Smoke tests", "", f"- {passed}/{len(tests)} passed", ""]
+        for t in tests:
+            if t["status"] == "failed":
+                req = t["request"]
+                lines.append(f"- FAIL {req['method']} {req['url']} — {t['reason']}")
+                lines.append(f"  reproduce: {t['reproduce'][0]}")
         lines.append("")
 
     return "\n".join(lines)

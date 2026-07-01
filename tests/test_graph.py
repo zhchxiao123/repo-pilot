@@ -113,6 +113,33 @@ def test_discover_populates_targets_from_running_app(
     assert "Test targets" in (tmp_path / "report.md").read_text()
 
 
+def test_test_phase_runs_smoke_and_reports(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    ex = FakeSandboxExecutor(
+        ports={3000: 49152},
+        responses={"/health": 200, "/api/health": 200, "/": 200},
+    )
+    final = _run(ex, tmp_path, origin)
+    assert final["tests"]
+    assert all(t["status"] == "passed" for t in final["tests"])
+    assert "Smoke tests" in (tmp_path / "report.md").read_text()
+
+
+def test_broken_endpoint_is_reported_as_smoke_failure(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    # /health is healthy (verify passes) but / returns 500 (smoke catches it)
+    ex = FakeSandboxExecutor(
+        ports={3000: 49152},
+        responses={"/health": 200, "/api/health": 200, "/": 500},
+    )
+    _run(ex, tmp_path, origin)
+    report = (tmp_path / "report.md").read_text()
+    assert "FAIL" in report
+    assert "curl" in report
+
+
 def test_compose_only_repo_yields_deferred_report(tmp_path, git_repo_from):
     src = tmp_path / "composeonly"
     src.mkdir()
