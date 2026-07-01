@@ -6,11 +6,37 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 FIXTURE_REPOS_DIR = Path(__file__).parent / "fixtures" / "repos"
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def git_origin(tmp_path):
+    """A local git repo with two commits. Returns (path, first_sha, second_sha)."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@t.t")
+    _git(origin, "config", "user.name", "t")
+    (origin / "VERSION").write_text("one\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-q", "-m", "first")
+    first = _git(origin, "rev-parse", "HEAD")
+    (origin / "VERSION").write_text("two\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-q", "-m", "second")
+    second = _git(origin, "rev-parse", "HEAD")
+    return origin, first, second
 
 
 @pytest.fixture
