@@ -3,8 +3,8 @@
 A fixed LangGraph DAG over clone -> profile -> plan -> verify -> discover -> test ->
 report. The Sandbox Executor is injected so the verify phase runs against either
 the real Docker executor or a fake, keeping the pipeline testable with no Docker
-(ADR-0004). This slice uses a hardcoded Runbook in the plan phase; later slices
-replace it with an evidence-based planner.
+(ADR-0004). The plan phase builds evidence-based candidate Runbooks via the
+planner; a compose-only repo is deferred rather than failed.
 
 State is the thin, typed Runbook-spine plus a ``visited`` execution trace.
 """
@@ -23,9 +23,11 @@ from langgraph.graph import END, START, StateGraph
 from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
 from repo_pilot.compose import compile_compose, iter_step_commands
-from repo_pilot.evidence import write_evidence
+from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
+from repo_pilot.extractors import extract_signals
 from repo_pilot.healthcheck import run_healthcheck
+from repo_pilot.planner import plan
 from repo_pilot.report import render_report
 from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
@@ -46,6 +48,7 @@ class State(TypedDict, total=False):
     profile: Any
     evidence: list
     runbook: dict
+    deferred_reason: str | None
     attempts: list
     verified: bool
     targets: list
@@ -82,26 +85,6 @@ def initial_state(
     }
 
 
-def _hardcoded_runbook(repo_url: str, repo_ref: RepoRef) -> dict:
-    """Placeholder Runbook for the Express fixture (replaced by the planner slice)."""
-    return {
-        "schema_version": "v1",
-        "id": "node_npm_start",
-        "status": "candidate",
-        "repo": {"url": repo_url, "commit": repo_ref.commit},
-        "runtime": {"image": "node:20-bookworm", "workdir": "/workspace/repo"},
-        "steps": {
-            "setup": [{"command": "npm install"}],
-            "start": [{"command": "npm start", "expected_ports": [3000]}],
-        },
-        "healthcheck": {
-            "strategy": "http",
-            "url_candidates": ["/health", "/"],
-            "acceptable_status": [200, 204, 301, 302, 404],
-        },
-    }
-
-
 def _reproduce(repo_url: str, runbook: dict) -> list[str]:
     # Clone into an explicit `repo` dir so the following `cd repo` is correct.
     return [f"git clone {repo_url} repo", "cd repo", *iter_step_commands(runbook)]
@@ -121,7 +104,10 @@ def build_graph(
         return {"repo_ref": ref, "visited": ["clone"]}
 
     def _profile(state: State) -> dict:
-        prof, evidence = profiler.profile(state["repo_dir"])
+        builder = EvidenceBuilder()
+        prof, _ = profiler.profile(state["repo_dir"], builder)
+        extract_signals(state["repo_dir"], builder)
+        evidence = builder.items
         prof["repo"] = {
             "url": state["repo_url"],
             "commit": state["repo_ref"].commit,
@@ -134,10 +120,14 @@ def build_graph(
         return {"profile": prof, "evidence": evidence, "visited": ["profile"]}
 
     def _plan(state: State) -> dict:
-        runbook = _hardcoded_runbook(state["repo_url"], state["repo_ref"])
-        return {"runbook": runbook, "visited": ["plan"]}
+        result = plan(state["profile"], state["evidence"])
+        if result.candidates:
+            return {"runbook": result.candidates[0], "visited": ["plan"]}
+        return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
 
     def _verify(state: State) -> dict:
+        if state.get("runbook") is None:
+            return {"verified": False, "visited": ["verify"]}
         runbook = dict(state["runbook"])
         sandbox = executor.start(
             compile_compose(runbook), repo_dir=str(state["repo_ref"].repo_dir)
@@ -190,7 +180,12 @@ def build_graph(
             Path(state["runbook_path"]).write_text(
                 yaml.safe_dump(runbook, sort_keys=True)
             )
-        markdown = render_report(state["repo_url"], state["repo_ref"], runbook=runbook)
+        markdown = render_report(
+            state["repo_url"],
+            state["repo_ref"],
+            runbook=runbook,
+            deferred_reason=state.get("deferred_reason"),
+        )
         Path(state["report_path"]).write_text(markdown)
         return {"report": markdown, "visited": ["report"]}
 

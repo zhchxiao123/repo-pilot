@@ -43,18 +43,22 @@ def test_graph_runs_all_phases_in_order_clones_and_reports(tmp_path, git_origin)
     assert second in report
 
 
-def test_verify_pass_marks_runbook_verified(tmp_path, git_origin):
-    origin, _first, _second = git_origin
+def test_verify_pass_marks_runbook_verified(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
     final = _run(_success_executor(), tmp_path, origin)
 
     assert final["verified"] is True
     assert final["runbook"]["status"] == "verified"
     assert final["runbook"]["verification"]["healthcheck_result"]["passed"] is True
+    # the runbook was evidence-derived, not hardcoded
+    assert final["runbook"]["evidence_refs"]
     assert "verified" in (tmp_path / "report.md").read_text().lower()
 
 
-def test_verified_runbook_is_persisted_and_schema_valid(tmp_path, git_origin):
-    origin, _first, _second = git_origin
+def test_verified_runbook_is_persisted_and_schema_valid(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
     _run(_success_executor(), tmp_path, origin)
 
     runbook_file = tmp_path / "runbook.yaml"
@@ -64,8 +68,10 @@ def test_verified_runbook_is_persisted_and_schema_valid(tmp_path, git_origin):
     validate_runbook(data)  # conforms to the Runbook schema (ADR-0010)
 
 
-def test_verify_failure_yields_failure_report_with_logs(tmp_path, git_origin):
-    origin, _first, _second = git_origin
+def test_verify_failure_yields_failure_report_with_logs(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
     # executor answers nothing acceptable -> healthcheck fails; logs are captured
     failing = FakeSandboxExecutor(
         ports={3000: 49152}, responses={"/": 500}, logs="npm ERR! boom"
@@ -96,6 +102,18 @@ def test_profile_phase_writes_valid_artifacts(tmp_path, git_repo_from, fixture_r
     # entrypoint conclusions resolve to real evidence items
     for entry in profile["entrypoints"]:
         assert set(entry["evidence_refs"]) <= ids
+
+
+def test_compose_only_repo_yields_deferred_report(tmp_path, git_repo_from):
+    src = tmp_path / "composeonly"
+    src.mkdir()
+    (src / "docker-compose.yml").write_text("services: {}\n")
+    origin, _commit = git_repo_from(src)
+
+    final = _run(_success_executor(), tmp_path, origin)
+    assert final.get("runbook") is None
+    assert final["deferred_reason"] == "needs-compose"
+    assert "deferred" in (tmp_path / "report.md").read_text().lower()
 
 
 def test_macro_phases_are_the_documented_dag():
