@@ -18,11 +18,15 @@ this document is the map.
 
 ## The pipeline (macro-skeleton)
 
-A fixed LangGraph DAG (ADR-0006). Each phase reads/writes a thin, typed state whose
-spine is the Runbook.
+A LangGraph graph (ADR-0006). Each phase reads/writes a thin, typed state whose
+spine is the Runbook. The happy path is linear; `verify` uses **conditional +
+cyclic edges** for the repair loop (ADR-0012).
 
 ```
-clone → profile → plan → verify → discover → test → report
+clone → profile → plan → verify ─▶ discover → test → report
+                            │  ▲
+                            ▼  │ (patch & retry)
+                          repair
 ```
 
 | Phase | Module | Does |

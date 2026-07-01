@@ -29,6 +29,16 @@ Adopt `docs/repair-loop.md`:
 - **Acceptance**: keep a patch only if sandbox re-run advances the ladder; else
   discard + recompile.
 
+## Realization (2026-07-02)
+
+Implemented as a **cyclic LangGraph** (the framework's first real use): `verify`
+branches via conditional edges to `discover` (verified) / `repair` (retry) /
+`report` (give up); `repair` loops back to `verify`. `repair.py` does rules-first
+(§9.2 patterns: corepack/pip/npm) then LLM patching, schema-validated, security
+preserved. Bounds: `max_repair_attempts` (default 3) + no-repeat patch fingerprint.
+Verified end-to-end in real Docker: a broken plan → LLM repair → re-verify → smoke.
+The full progress-ladder (setup<build<…) is a later refinement.
+
 ## Consequences
 
 - Thrash caught early by 2-consecutive-no-progress before the hard cap.

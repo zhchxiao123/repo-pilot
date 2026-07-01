@@ -34,15 +34,19 @@ def _success_executor():
     return FakeSandboxExecutor(ports={3000: 49152}, responses={"/": 200, "/health": 200})
 
 
-def test_graph_runs_all_phases_in_order_clones_and_reports(tmp_path, git_origin):
-    origin, _first, second = git_origin
+def test_graph_runs_all_phases_in_order_clones_and_reports(
+    tmp_path, git_repo_from, fixture_repo
+):
+    # a verifying repo exercises every phase in order (conditional edges route
+    # verify -> discover on success)
+    origin, commit = git_repo_from(fixture_repo("express-min"))
     final = _run(_success_executor(), tmp_path, origin)
 
     assert final["visited"] == MACRO_PHASES
-    assert final["repo_ref"].commit == second
+    assert final["repo_ref"].commit == commit
     report = (tmp_path / "report.md").read_text()
     assert str(origin) in report
-    assert second in report
+    assert commit in report
 
 
 def test_verify_pass_marks_runbook_verified(tmp_path, git_repo_from, fixture_repo):
@@ -186,6 +190,53 @@ def test_logs_are_redacted_in_the_report(tmp_path, git_repo_from, fixture_repo):
     report = (tmp_path / "report.md").read_text()
     assert "hunter2" not in report
     assert "REDACTED" in report
+
+
+class _RepairFake:
+    """Stateful executor: healthy only once the app command contains the marker."""
+
+    def start(self, compose, repo_dir=None):
+        healthy = "FIXED" in json.dumps(compose)
+        responses = (
+            {"/health": 200, "/api/health": 200, "/": 200} if healthy else {"/": 500}
+        )
+        return FakeSandboxExecutor(ports={3000: 49000}, responses=responses).start({})
+
+
+def test_repair_loop_fixes_a_failed_start_and_reverifies(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    # deterministic candidate ("npm start") fails; the LLM repair returns a plan
+    # carrying the marker the fake needs, so re-verify passes.
+    client = ReplayModelClient([
+        json.dumps({"image": "node:20-bookworm", "setup": ["npm install"],
+                    "start": "npm start FIXED", "port": 3000})
+    ])
+    final = _run(
+        _RepairFake(), tmp_path, origin, model_client=client, max_repair_attempts=3
+    )
+
+    assert final["verified"] is True
+    assert final["repair_attempts"] == 1
+    assert "FIXED" in final["runbook"]["steps"]["start"][0]["command"]
+    history = final["runbook"]["repair_history"]
+    assert history[0]["source"] == "llm"
+    assert "repair" in final["visited"] and final["visited"].count("verify") == 2
+
+
+def test_repair_loop_gives_up_after_max_attempts(tmp_path, git_repo_from, fixture_repo):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    # LLM keeps proposing changes that never satisfy the fake -> bounded, no hang
+    client = ReplayModelClient([
+        json.dumps({"image": "node:20-bookworm", "setup": [], "start": f"npm start v{i}", "port": 3000})
+        for i in range(10)
+    ])
+    final = _run(
+        _RepairFake(), tmp_path, origin, model_client=client, max_repair_attempts=2
+    )
+    assert final["verified"] is False
+    assert final["repair_attempts"] == 2  # stopped at the bound
 
 
 def test_llm_planning_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
