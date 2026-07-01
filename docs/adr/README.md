@@ -19,3 +19,4 @@ Each ADR: Context → Decision → Consequences. Status: proposed | accepted | s
 | [0011](0011-confidence-model.md) | Confidence = noisy-OR over evidence kinds + conflict discount | accepted |
 | [0012](0012-repair-loop-bounds.md) | Repair Loop bounds and anti-thrash rule | accepted |
 | [0013](0013-executor-for-isolated-daemons.md) | Executor for isolated Docker daemons: build-context + in-network probe | accepted |
+| [0014](0014-llm-assisted-planning.md) | LLM-assisted planning for stacks the rules don't cover | accepted |

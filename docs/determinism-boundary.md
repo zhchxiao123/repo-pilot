@@ -48,11 +48,11 @@ golden-file testable with no live tokens.
 
 ## Where LLM/agent autonomy adds value (orchestration + proposing)
 
-- Planning candidate Runbooks from mixed/conflicting evidence.
-- Interpreting **novel** failure logs (beyond the §9.2 table) into a proposed
-  Runbook patch.
+- **LLM-assisted planning** (ADR-0014): when deterministic rules yield no candidate
+  (a stack rules don't cover), propose full Runbook candidates from profile +
+  evidence + repo files. Schema-constrained; sandbox-verified.
+- Interpreting **novel** failure logs into a proposed Runbook patch (repair loop).
 - Synthesizing **strong-oracle** business-intent tests bound to Test Targets.
-- Extracting run intent from ambiguous NL prose (README, free-text API docs).
 
 In all four, the agent *proposes*; a deterministic tool or the sandbox *verifies*
 before the result is trusted.

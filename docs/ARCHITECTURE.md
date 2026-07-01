@@ -44,9 +44,10 @@ Orchestration and glue: `graph.py` (the DAG + node wiring), `cli.py` (entry poin
 
 Almost everything is deterministic and runs with **no LLM and no tokens**: parsing,
 framework detection, the confidence formula, compose compilation, execution,
-healthcheck, discovery, and smoke tests. The **only** LLM seam v1 can exercise is
-NL-prose run-command extraction, and it fires *only* when deterministic extraction
-found nothing — with its proposal still verified by the sandbox. Details in
+healthcheck, discovery, and smoke tests. The LLM is a *gated fallback* — chiefly
+**LLM-assisted planning** (ADR-0014): when deterministic rules produce no candidate
+(a stack rules don't cover), the model proposes full Runbook candidates from the
+profile + evidence + repo files, and the **sandbox still verifies** them. Details in
 [`determinism-boundary.md`](determinism-boundary.md); the confidence math in
 [`confidence-model.md`](confidence-model.md); the (planned) repair loop in
 [`repair-loop.md`](repair-loop.md).
