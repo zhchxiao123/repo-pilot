@@ -20,22 +20,29 @@ from typing import Protocol, runtime_checkable
 from repo_pilot.compose import render_compose, with_repo_mount
 
 
-def http_status(
+def http_fetch(
     host_port: int, path: str, timeout: float = 3.0, host: str = "127.0.0.1"
-) -> int | None:
-    """Real HTTP GET probe. Returns the status code, or None if unreachable.
+) -> tuple[int | None, str | None]:
+    """Real HTTP GET. Returns (status, body); (None, None) if unreachable.
 
-    An HTTP error response (e.g. 404, 500) is a *reachable* server, so its status
-    is returned; only connection/timeout failures yield None.
+    An HTTP error response (404, 500, ...) is a reachable server, so its status is
+    returned (body may be None); only connection/timeout failures yield (None, None).
     """
     url = f"http://{host}:{host_port}{path}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.status
+            return response.status, response.read().decode(errors="replace")
     except urllib.error.HTTPError as exc:
-        return exc.code
+        return exc.code, None
     except (urllib.error.URLError, OSError):
-        return None
+        return None, None
+
+
+def http_status(
+    host_port: int, path: str, timeout: float = 3.0, host: str = "127.0.0.1"
+) -> int | None:
+    """Real HTTP GET probe. Returns the status code, or None if unreachable."""
+    return http_fetch(host_port, path, timeout=timeout, host=host)[0]
 
 
 @runtime_checkable
@@ -51,6 +58,11 @@ class RunningSandbox(Protocol):
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
         """Return the HTTP status for a GET, or None if unreachable."""
 
+    def fetch(
+        self, host_port: int, path: str, timeout: float = 3.0
+    ) -> tuple[int | None, str | None]:
+        """Return (status, body) for a GET; (None, None) if unreachable."""
+
     def stop(self) -> None: ...
 
 
@@ -62,13 +74,25 @@ class SandboxExecutor(Protocol):
 
 
 class _FakeSandbox:
-    def __init__(self, ports: dict[int, int], responses: dict[str, int], logs: str):
+    def __init__(
+        self,
+        ports: dict[int, int],
+        responses: dict[str, int],
+        logs: str,
+        bodies: dict[str, str],
+    ):
         self.ports = ports
         self.responses = responses
         self.logs = logs
+        self.bodies = bodies
 
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
         return self.responses.get(path)
+
+    def fetch(
+        self, host_port: int, path: str, timeout: float = 3.0
+    ) -> tuple[int | None, str | None]:
+        return self.responses.get(path), self.bodies.get(path)
 
     def stop(self) -> None:
         pass
@@ -82,13 +106,17 @@ class FakeSandboxExecutor:
         ports: dict[int, int] | None = None,
         responses: dict[str, int] | None = None,
         logs: str = "started",
+        bodies: dict[str, str] | None = None,
     ):
         self.ports = ports or {}
         self.responses = responses or {}
         self.logs = logs
+        self.bodies = bodies or {}
 
     def start(self, compose: dict, repo_dir: str | None = None) -> RunningSandbox:
-        return _FakeSandbox(dict(self.ports), dict(self.responses), self.logs)
+        return _FakeSandbox(
+            dict(self.ports), dict(self.responses), self.logs, dict(self.bodies)
+        )
 
 
 class DockerUnavailable(RuntimeError):
@@ -165,6 +193,11 @@ class _DockerSandbox:
 
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
         return http_status(host_port, path, timeout=timeout)
+
+    def fetch(
+        self, host_port: int, path: str, timeout: float = 3.0
+    ) -> tuple[int | None, str | None]:
+        return http_fetch(host_port, path, timeout=timeout)
 
     def stop(self) -> None:
         self._compose("down", "-v", "--remove-orphans")

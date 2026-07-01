@@ -23,6 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
 from repo_pilot.compose import compile_compose, iter_step_commands
+from repo_pilot.discovery import discover_targets
 from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
 from repo_pilot.extractors import extract_signals
@@ -51,6 +52,7 @@ class State(TypedDict, total=False):
     deferred_reason: str | None
     attempts: list
     verified: bool
+    sandbox: Any
     targets: list
     tests: list
     report: str
@@ -129,21 +131,20 @@ def build_graph(
         if state.get("runbook") is None:
             return {"verified": False, "visited": ["verify"]}
         runbook = dict(state["runbook"])
+        # The sandbox stays up on success so discover/test can use the live app;
+        # it is stopped in the report phase. On failure it is stopped immediately.
         sandbox = executor.start(
             compile_compose(runbook), repo_dir=str(state["repo_ref"].repo_dir)
         )
-        try:
-            result = run_healthcheck(
-                sandbox,
-                runbook.get("healthcheck", {}),
-                retries=healthcheck_retries,
-                poll_interval=poll_interval,
-                sleep=sleep,
-            )
-            ports = dict(sandbox.ports)
-            logs = sandbox.logs
-        finally:
-            sandbox.stop()
+        result = run_healthcheck(
+            sandbox,
+            runbook.get("healthcheck", {}),
+            retries=healthcheck_retries,
+            poll_interval=poll_interval,
+            sleep=sleep,
+        )
+        ports = dict(sandbox.ports)
+        logs = sandbox.logs
 
         attempt = {"healthcheck_passed": result.passed, "logs_summary": logs}
         if result.passed:
@@ -158,22 +159,45 @@ def build_graph(
                 "logs_summary": logs,
                 "reproduce": _reproduce(state["repo_url"], runbook),
             }
-        else:
-            runbook["status"] = "failed"
-            runbook["verification"] = {
-                "healthcheck_result": {"passed": False},
-                "logs_summary": logs,
-                "ports": [{"container": c, "host": h} for c, h in ports.items()],
+            return {
+                "runbook": runbook,
+                "verified": True,
+                "attempts": [attempt],
+                "sandbox": sandbox,
+                "visited": ["verify"],
             }
 
+        sandbox.stop()
+        runbook["status"] = "failed"
+        runbook["verification"] = {
+            "healthcheck_result": {"passed": False},
+            "logs_summary": logs,
+            "ports": [{"container": c, "host": h} for c, h in ports.items()],
+        }
         return {
             "runbook": runbook,
-            "verified": result.passed,
+            "verified": False,
             "attempts": [attempt],
             "visited": ["verify"],
         }
 
+    def _discover(state: State) -> dict:
+        sandbox = state.get("sandbox")
+        if sandbox is None:
+            return {"visited": ["discover"]}
+        fallback = state["runbook"].get("healthcheck", {}).get("url_candidates")
+        # Never let a discovery error abort the graph — the report phase must still
+        # run to tear the sandbox down (avoids a container/volume leak).
+        try:
+            targets = discover_targets(sandbox, fallback_paths=fallback)
+        except Exception:
+            targets = []
+        return {"targets": targets, "visited": ["discover"]}
+
     def _report(state: State) -> dict:
+        sandbox = state.get("sandbox")
+        if sandbox is not None:
+            sandbox.stop()
         runbook = state.get("runbook")
         if runbook is not None:
             validate_runbook(runbook)
@@ -185,6 +209,7 @@ def build_graph(
             state["repo_ref"],
             runbook=runbook,
             deferred_reason=state.get("deferred_reason"),
+            targets=state.get("targets"),
         )
         Path(state["report_path"]).write_text(markdown)
         return {"report": markdown, "visited": ["report"]}
@@ -200,7 +225,7 @@ def build_graph(
     graph.add_node("profile", _profile)
     graph.add_node("plan", _plan)
     graph.add_node("verify", _verify)
-    graph.add_node("discover", _passthrough("discover"))
+    graph.add_node("discover", _discover)
     graph.add_node("test", _passthrough("test"))
     graph.add_node("report", _report)
 
