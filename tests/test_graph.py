@@ -6,9 +6,11 @@ no Docker.
 
 import json
 
+import pytest
 import yaml
 
 from repo_pilot.executor import FakeSandboxExecutor
+from repo_pilot.model_client import ReplayModelClient
 from repo_pilot.graph import MACRO_PHASES, build_graph, initial_state
 from repo_pilot.schemas import validate_evidence, validate_profile, validate_runbook
 
@@ -184,6 +186,37 @@ def test_logs_are_redacted_in_the_report(tmp_path, git_repo_from, fixture_repo):
     report = (tmp_path / "report.md").read_text()
     assert "hunter2" not in report
     assert "REDACTED" in report
+
+
+def test_nl_fallback_produces_candidate_when_no_deterministic(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("readme-only"))
+    client = ReplayModelClient(
+        [json.dumps(["pip install -r requirements.txt", "python app.py"])]
+    )
+    ex = FakeSandboxExecutor(
+        ports={8000: 49000}, responses={"/": 200, "/health": 200, "/api/health": 200}
+    )
+    final = _run(ex, tmp_path, origin, model_client=client)
+
+    rb = final["runbook"]
+    assert rb["id"] == "nl_readme"
+    assert rb["steps"]["start"][0]["command"] == "python app.py"
+    assert rb["confidence"] == pytest.approx(0.30)
+    assert client.calls  # the model was consulted
+    assert final["verified"] is True  # subordination: sandbox still adjudicates
+
+
+def test_nl_fallback_not_used_when_deterministic_candidate_exists(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    client = ReplayModelClient([json.dumps(["should not run"])])
+    final = _run(_success_executor(), tmp_path, origin, model_client=client)
+
+    assert final["runbook"]["id"].startswith("node_")
+    assert client.calls == []  # the NL seam never fired
 
 
 def test_macro_phases_are_the_documented_dag():
