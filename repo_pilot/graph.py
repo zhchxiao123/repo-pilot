@@ -22,7 +22,8 @@ from langgraph.graph import END, START, StateGraph
 
 from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
-from repo_pilot.compose import compile_compose, iter_step_commands
+from repo_pilot.compose import compile_components, compile_compose, iter_step_commands
+from repo_pilot.component_oracles import verify_component
 from repo_pilot.discovery import discover_targets
 from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
@@ -203,9 +204,74 @@ def build_graph(
             "visited": ["plan"],
         }
 
+    def _verify_components(state: State) -> dict:
+        # Component Run Plan (#38): the system "runs" when every component reaches
+        # its oracle. Compose already gates start order (depends_on: service_healthy
+        # for native-cmd components); the remaining oracles are adjudicated post-up
+        # against the live sandbox (ADR-0004). The sandbox stays up on success.
+        runbook = dict(state["runbook"])
+        components = runbook["components"]
+        sandbox = executor.start(
+            compile_components(components), repo_dir=str(state["repo_ref"].repo_dir)
+        )
+        results = []
+        for comp in components:
+            res = verify_component(
+                comp,
+                sandbox,
+                retries=healthcheck_retries,
+                poll_interval=poll_interval,
+                sleep=sleep,
+            )
+            results.append(
+                {
+                    "name": comp["name"],
+                    "oracle": comp["oracle"]["type"],
+                    "passed": res.passed,
+                    "detail": res.detail,
+                }
+            )
+        verified = all(r["passed"] for r in results)
+        logs = redact(sandbox.logs)  # scrub secrets before anything is stored (§20.2)
+        ports = [
+            {"container": c, "host": h}
+            for comp in components
+            for c, h in sandbox.service_ports(comp["name"]).items()
+        ]
+        attempt = {"healthcheck_passed": verified, "logs_summary": logs}
+        verification = {
+            "healthcheck_result": {"passed": verified},
+            "logs_summary": logs,
+            "ports": ports,
+            "components": results,
+        }
+        if verified:
+            runbook["status"] = "verified"
+            verification["reproduce"] = _reproduce(state["repo_url"], runbook)
+            runbook["verification"] = verification
+            return {
+                "runbook": runbook,
+                "verified": True,
+                "attempts": [attempt],
+                "sandbox": sandbox,
+                "visited": ["verify"],
+            }
+        sandbox.stop()
+        runbook["status"] = "failed"
+        runbook["verification"] = verification
+        return {
+            "runbook": runbook,
+            "verified": False,
+            "attempts": [attempt],
+            "last_logs": logs,  # fed to the repair loop
+            "visited": ["verify"],
+        }
+
     def _verify(state: State) -> dict:
         if state.get("runbook") is None:
             return {"verified": False, "visited": ["verify"]}
+        if state["runbook"].get("components"):
+            return _verify_components(state)
         runbook = dict(state["runbook"])
         # The sandbox stays up on success so discover/test can use the live app;
         # it is stopped in the report phase. On failure it is stopped immediately.

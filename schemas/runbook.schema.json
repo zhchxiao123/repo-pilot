@@ -185,7 +185,22 @@
           }
         },
         "logs_summary": { "type": "string" },
-        "reproduce": { "type": "array", "items": { "type": "string" } }
+        "reproduce": { "type": "array", "items": { "type": "string" } },
+        "components": {
+          "type": "array",
+          "description": "Per-component oracle verdicts for a component Run Plan (#38).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "oracle", "passed"],
+            "properties": {
+              "name": { "type": "string" },
+              "oracle": { "type": "string" },
+              "passed": { "type": "boolean" },
+              "detail": { "type": "string" }
+            }
+          }
+        }
       }
     },
 
