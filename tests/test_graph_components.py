@@ -95,3 +95,37 @@ def test_component_system_fails_when_one_oracle_fails(
     results = {c["name"]: c for c in final["runbook"]["verification"]["components"]}
     assert results["db"]["passed"] is True
     assert results["backend"]["passed"] is False
+
+
+CLI_RUNBOOK = {
+    "schema_version": "v1", "id": "cli", "status": "candidate",
+    "repo": {"url": "https://github.com/org/repo", "commit": "abc123"},
+    "runtime": {"image": "python:3.11", "workdir": "/workspace/repo"},
+    "steps": {"start": [{"command": "pip install -e . && mytool convert sample.txt"}]},
+    "healthcheck": {"strategy": "http"}, "evidence_refs": ["ev_agent1"],
+    "components": [
+        {"name": "cli", "role": "cli", "image": "python:3.11", "workdir": "/workspace/repo",
+         "command": "pip install -e . && mytool convert sample.txt",
+         "oracle": {"type": "functional-smoke"}},
+    ],
+}
+
+
+def test_non_service_cli_verifies_by_running_to_a_clean_exit(
+    tmp_path, git_repo_from, fixture_repo, monkeypatch
+):
+    import copy
+    monkeypatch.setattr(
+        graph_module, "plan",
+        lambda p, e: PlanResult(candidates=[copy.deepcopy(CLI_RUNBOOK)]),
+    )
+    # the CLI ran its subcommand and exited 0 -> functional-smoke reached
+    executor = FakeSandboxExecutor(states={"cli": ("exited", None, 0)})
+    origin, _ = git_repo_from(fixture_repo("express-min"))
+    final = _run(executor, tmp_path, origin)
+
+    assert final["verified"] is True
+    comp = final["runbook"]["verification"]["components"][0]
+    assert comp["oracle"] == "functional-smoke" and comp["passed"] is True
+    report = (tmp_path / "report.md").read_text()
+    assert "cli: functional-smoke" in report

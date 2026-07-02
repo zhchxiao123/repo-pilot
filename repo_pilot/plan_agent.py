@@ -64,7 +64,18 @@ Then call submit_plan exactly once with:
   A component with a `command` runs repo code; one without (db/cache) is a managed
   image. For a SINGLE-container service you may instead give just image/setup/start/
   port (+ optional legacy `services`/`env`), and it is treated as one component.
-  For non-services, candidates is [].
+
+  NON-SERVICE repos still "succeed" by being EXERCISED, not merely by existing.
+  When you can, propose a candidate whose component runs the repo to a real result
+  and pick the matching oracle — success is a clean exit or expected output:
+    - cli:     run a real subcommand (not just --help), oracle functional-smoke or exit-zero
+    - library: run its test suite (pytest / npm test / go test), oracle tests-pass
+    - batch:   run the job to completion, oracle exit-zero
+    - build:   run the build/validate (make / docker build / terraform validate),
+               oracle build-succeeds
+  Set setup/command so the exercise actually runs (install deps first). Still
+  classify honestly (cli/library/...). Only leave candidates [] when there is truly
+  nothing runnable (docs-only, or you couldn't determine how to exercise it).
 Output nothing else; do all reasoning via tool calls then submit_plan."""
 
 

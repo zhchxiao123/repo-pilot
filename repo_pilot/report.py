@@ -45,19 +45,34 @@ def render_report(
         return "\n".join(lines)
 
     lines += ["## Runtime", ""]
+    if classification:
+        lines.append(f"- Classification: {classification}")
     if "confidence" in runbook:
         lines.append(
             f"- Candidate: {runbook.get('id')} (confidence {runbook['confidence']:.2f})"
         )
+    verification = runbook.get("verification", {})
+    components = verification.get("components")
     if runbook.get("status") == "verified":
-        hc = runbook.get("verification", {}).get("healthcheck_result", {})
         lines.append("- Status: verified")
-        lines.append(f"- Healthcheck: {hc.get('status_code')} at {hc.get('url')}")
-        reproduce = runbook.get("verification", {}).get("reproduce", [])
+        if components:
+            # a system of components: report each component's oracle verdict
+            lines += ["", "### Components", ""]
+            for c in components:
+                lines.append(f"- {c['name']}: {c['oracle']} — reached ({c['detail']})")
+        else:
+            hc = verification.get("healthcheck_result", {})
+            lines.append(f"- Healthcheck: {hc.get('status_code')} at {hc.get('url')}")
+        reproduce = verification.get("reproduce", [])
         if reproduce:
             lines += ["", "### Reproduce", "", "```", *reproduce, "```"]
     else:
         lines.append("- Status: not verified (failed)")
+        if components:
+            lines += ["", "### Components", ""]
+            for c in components:
+                verdict = "reached" if c["passed"] else "NOT reached"
+                lines.append(f"- {c['name']}: {c['oracle']} — {verdict} ({c['detail']})")
         logs = runbook.get("verification", {}).get("logs_summary")
         if logs:
             excerpt = "\n".join(logs.strip().splitlines()[-20:])

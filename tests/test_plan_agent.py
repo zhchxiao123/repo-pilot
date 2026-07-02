@@ -203,3 +203,29 @@ def test_agent_drops_component_with_invalid_oracle(tmp_path):
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
     # the only component was dropped -> no valid components -> candidate dropped
     assert result.candidates == []
+
+
+def test_agent_exercises_a_cli_as_a_component(tmp_path):
+    # a non-service repo still succeeds by being run: a CLI subcommand, oracle
+    # functional-smoke (#41)
+    model = FakeChatModel([
+        [_tc("submit_plan", {
+            "classification": "cli",
+            "candidates": [{
+                "components": [
+                    {"name": "cli", "role": "cli", "image": "python:3.11",
+                     "workdir": "/workspace/repo",
+                     "command": "pip install -e . && mytool convert sample.txt",
+                     "oracle": {"type": "functional-smoke"}},
+                ],
+            }],
+            "rationale": "console_scripts entry point; run a real subcommand",
+        }, "t1")],
+    ])
+    result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
+
+    assert result.classification == "cli"
+    rb = result.candidates[0]
+    validate_runbook(rb)
+    assert rb["components"][0]["oracle"]["type"] == "functional-smoke"
+    assert "mytool convert" in rb["steps"]["start"][0]["command"]
