@@ -7,6 +7,8 @@ with no Docker. The real Docker-backed implementation lands in a later slice.
 
 from __future__ import annotations
 
+import copy
+import json
 import os
 import shutil
 import subprocess
@@ -63,6 +65,16 @@ class RunningSandbox(Protocol):
     ) -> tuple[int | None, str | None]:
         """Return (status, body) for a GET; (None, None) if unreachable."""
 
+    def service_ports(self, name: str) -> dict[int, int]:
+        """Published ports (container -> host) for one component's service."""
+
+    def service_state(self, name: str) -> tuple[str, str | None, int | None]:
+        """A component's (state, health, exit_code). state in
+        running|exited|created; health in healthy|unhealthy|starting|None."""
+
+    def service_logs(self, name: str) -> str:
+        """Captured logs for one component's service."""
+
     def stop(self) -> None: ...
 
 
@@ -80,11 +92,17 @@ class _FakeSandbox:
         responses: dict[str, int],
         logs: str,
         bodies: dict[str, str],
+        component_ports: dict[str, dict[int, int]] | None = None,
+        states: dict[str, tuple[str, str | None, int | None]] | None = None,
+        service_logs: dict[str, str] | None = None,
     ):
         self.ports = ports
         self.responses = responses
         self.logs = logs
         self.bodies = bodies
+        self._component_ports = component_ports or {}
+        self._states = states or {}
+        self._service_logs = service_logs or {}
 
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
         return self.responses.get(path)
@@ -94,12 +112,26 @@ class _FakeSandbox:
     ) -> tuple[int | None, str | None]:
         return self.responses.get(path), self.bodies.get(path)
 
+    def service_ports(self, name: str) -> dict[int, int]:
+        return dict(self._component_ports.get(name, {}))
+
+    def service_state(self, name: str) -> tuple[str, str | None, int | None]:
+        return self._states.get(name, ("running", None, None))
+
+    def service_logs(self, name: str) -> str:
+        return self._service_logs.get(name, self.logs)
+
     def stop(self) -> None:
         pass
 
 
 class FakeSandboxExecutor:
-    """Executor test double: returns canned ports, logs, and HTTP responses."""
+    """Executor test double: returns canned ports, logs, and HTTP responses.
+
+    For component Run Plans it also serves canned per-service ports, compose state
+    (state, health, exit_code), and per-service logs so the component-verify path
+    can be exercised with no Docker.
+    """
 
     def __init__(
         self,
@@ -107,15 +139,27 @@ class FakeSandboxExecutor:
         responses: dict[str, int] | None = None,
         logs: str = "started",
         bodies: dict[str, str] | None = None,
+        component_ports: dict[str, dict[int, int]] | None = None,
+        states: dict[str, tuple[str, str | None, int | None]] | None = None,
+        service_logs: dict[str, str] | None = None,
     ):
         self.ports = ports or {}
         self.responses = responses or {}
         self.logs = logs
         self.bodies = bodies or {}
+        self.component_ports = component_ports or {}
+        self.states = states or {}
+        self.service_logs = service_logs or {}
 
     def start(self, compose: dict, repo_dir: str | None = None) -> RunningSandbox:
         return _FakeSandbox(
-            dict(self.ports), dict(self.responses), self.logs, dict(self.bodies)
+            dict(self.ports),
+            dict(self.responses),
+            self.logs,
+            dict(self.bodies),
+            {k: dict(v) for k, v in self.component_ports.items()},
+            dict(self.states),
+            dict(self.service_logs),
         )
 
 
@@ -163,9 +207,65 @@ def _looks_like_compose_misconfig(text: str) -> bool:
     return any(m in text for m in _COMPOSE_MISCONFIG_MARKERS)
 
 
-def _app_target_ports(compose: dict) -> list[int]:
-    app = compose.get("services", {}).get("app", {})
-    return [p["target"] for p in app.get("ports", []) if "target" in p]
+def _service_target_ports(service: dict) -> list[int]:
+    return [p["target"] for p in service.get("ports", []) if "target" in p]
+
+
+def _parse_ps_json(stdout: str) -> list[dict]:
+    """Parse `compose ps --format json` (NDJSON in v2, a JSON array in older builds)."""
+    text = stdout.strip()
+    if not text:
+        return []
+    try:  # older single-array form
+        loaded = json.loads(text)
+        return loaded if isinstance(loaded, list) else [loaded]
+    except json.JSONDecodeError:
+        pass
+    objs: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            objs.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return objs
+
+
+def _app_like(service: dict) -> bool:
+    """A service that runs repo code — it has a command and a workdir, so the repo
+    must be baked into its image (a managed dependency image has neither)."""
+    return "command" in service and "working_dir" in service
+
+
+def _bake_repo_container(service: dict) -> None:
+    """Run an untrusted repo-code container as root (to write its build layer) with
+    HOME set for tooling caches, inside its existing hardening (ADR-0013)."""
+    service["user"] = "0:0"
+    env = service.setdefault("environment", {})
+    if isinstance(env, dict):
+        env.setdefault("HOME", "/tmp")
+
+
+def _build_component_services(compose: dict, repo_dir: str) -> dict:
+    """Bake the cloned repo into each app-like component's image via a generated
+    per-service Dockerfile, and run it as root-in-hardened-container. Managed
+    dependency images (no command/workdir) are left to pull their own image."""
+    result = copy.deepcopy(compose)
+    for name, service in result.get("services", {}).items():
+        if not _app_like(service):
+            continue
+        image = service.get("image", "debian:stable-slim")
+        workdir = service["working_dir"]
+        dockerfile = f"Dockerfile.repopilot.{name}"
+        (Path(repo_dir) / dockerfile).write_text(
+            f"FROM {image}\nWORKDIR {workdir}\nCOPY . {workdir}\n"
+        )
+        service.pop("image", None)
+        service["build"] = {"context": repo_dir, "dockerfile": dockerfile}
+        _bake_repo_container(service)
+    return result
 
 
 def _run_compose(
@@ -207,6 +307,7 @@ class _DockerSandbox:
         workdir: Path,
         ports: dict[int, int],
         startup_log: str,
+        component_ports: dict[str, dict[int, int]] | None = None,
     ):
         self._compose_cmd = compose_cmd
         self._docker_cmd = docker_cmd
@@ -215,6 +316,7 @@ class _DockerSandbox:
         self._workdir = workdir
         self.ports = ports
         self._startup_log = startup_log
+        self._component_ports = component_ports or {}
 
     def _compose(self, *args: str) -> subprocess.CompletedProcess:
         # Always pass -p and -f so the project resolves regardless of cwd/filename.
@@ -229,6 +331,25 @@ class _DockerSandbox:
     def logs(self) -> str:
         result = self._compose("logs", "--no-color")
         return (self._startup_log + result.stdout + result.stderr).strip()
+
+    def service_ports(self, name: str) -> dict[int, int]:
+        return dict(self._component_ports.get(name, {}))
+
+    def service_logs(self, name: str) -> str:
+        result = self._compose("logs", "--no-color", name)
+        return (result.stdout + result.stderr).strip()
+
+    def service_state(self, name: str) -> tuple[str, str | None, int | None]:
+        # `compose ps` reports the current state/health/exit code per service. v2
+        # emits one JSON object per line (older builds a single JSON array).
+        result = self._compose("ps", "-a", "--format", "json")
+        for obj in _parse_ps_json(result.stdout):
+            if obj.get("Service") == name:
+                state = str(obj.get("State", "")).lower()
+                health = obj.get("Health") or None
+                exit_code = obj.get("ExitCode")
+                return state, (str(health).lower() if health else None), exit_code
+        return "unknown", None, None
 
     def http_get(self, host_port: int, path: str, timeout: float = 3.0) -> int | None:
         return self.fetch(host_port, path, timeout=timeout)[0]
@@ -287,24 +408,28 @@ class DockerSandboxExecutor:
     def start(self, compose: dict, repo_dir: str | None = None) -> RunningSandbox:
         build = repo_dir is not None
         if repo_dir is not None:
-            app_spec = compose.get("services", {}).get("app", {})
-            image = app_spec.get("image", "debian:stable-slim")
-            app_workdir = app_spec.get("working_dir", "/workspace/repo")
-            dockerfile = "Dockerfile.repopilot"
-            # Copy the repo into the image (streamed over the API — no shared FS
-            # needed, unlike bind mounts). Runs as root in the hardened container
-            # (cap_drop ALL + no-new-privileges + limits) so it can write its own
-            # layer; HOME is set for tooling caches. Trade-off recorded in ADR-0007.
-            (Path(repo_dir) / dockerfile).write_text(
-                f"FROM {image}\nWORKDIR {app_workdir}\nCOPY . {app_workdir}\n"
-            )
-            compose = with_repo_build(compose, repo_dir, dockerfile)
-            app = compose.get("services", {}).get("app")
-            if app is not None:
-                app["user"] = "0:0"
-                env = app.setdefault("environment", {})
-                if isinstance(env, dict):
-                    env.setdefault("HOME", "/tmp")
+            services = compose.get("services", {})
+            if "app" in services:
+                app_spec = services["app"]
+                image = app_spec.get("image", "debian:stable-slim")
+                app_workdir = app_spec.get("working_dir", "/workspace/repo")
+                dockerfile = "Dockerfile.repopilot"
+                # Copy the repo into the image (streamed over the API — no shared FS
+                # needed, unlike bind mounts). Runs as root in the hardened container
+                # (cap_drop ALL + no-new-privileges + limits) so it can write its own
+                # layer; HOME is set for tooling caches. Trade-off recorded in ADR-0007.
+                (Path(repo_dir) / dockerfile).write_text(
+                    f"FROM {image}\nWORKDIR {app_workdir}\nCOPY . {app_workdir}\n"
+                )
+                compose = with_repo_build(compose, repo_dir, dockerfile)
+                app = compose.get("services", {}).get("app")
+                if app is not None:
+                    _bake_repo_container(app)
+            else:
+                # Component Run Plan: bake the repo into every service that runs repo
+                # code (each with its own base image + workdir); managed images (db,
+                # cache) build nothing. Same hardening trade-off as the app above.
+                compose = _build_component_services(compose, repo_dir)
 
         workdir = Path(tempfile.mkdtemp(prefix="repo-pilot-"))
         compose_file = workdir / "compose.generated.yaml"
@@ -327,19 +452,20 @@ class DockerSandboxExecutor:
                 + " ".join(startup_log.split())[:200]
             )
 
-        ports: dict[int, int] = {}
-        for target in _app_target_ports(compose):
-            mapped = _run_compose(
-                self._compose_cmd,
-                workdir,
-                [*base, "port", "app", str(target)],
-                timeout=_CMD_TIMEOUT,
-            )
-            lines = mapped.stdout.strip().splitlines()
-            if mapped.returncode == 0 and lines:
-                host = lines[-1].rsplit(":", 1)[-1].strip()
-                if host.isdigit():
-                    ports[target] = int(host)
+        component_ports: dict[str, dict[int, int]] = {}
+        for name, service in compose.get("services", {}).items():
+            for target in _service_target_ports(service):
+                mapped = _run_compose(
+                    self._compose_cmd,
+                    workdir,
+                    [*base, "port", name, str(target)],
+                    timeout=_CMD_TIMEOUT,
+                )
+                lines = mapped.stdout.strip().splitlines()
+                if mapped.returncode == 0 and lines:
+                    host = lines[-1].rsplit(":", 1)[-1].strip()
+                    if host.isdigit():
+                        component_ports.setdefault(name, {})[target] = int(host)
 
         return _DockerSandbox(
             self._compose_cmd,
@@ -347,6 +473,7 @@ class DockerSandboxExecutor:
             project,
             compose_file,
             workdir,
-            ports,
+            component_ports.get("app", {}),  # back-compat: single-app .ports
             startup_log,
+            component_ports,
         )
