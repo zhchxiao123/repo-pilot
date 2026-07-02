@@ -17,6 +17,7 @@ from langchain_core.tools import tool
 
 from repo_pilot.confidence import confidence
 from repo_pilot.explore_tools import RepoTools
+from repo_pilot.oracles import ORACLE_TYPES
 from repo_pilot.planner import default_healthcheck
 from repo_pilot.schemas import SchemaValidationError, validate_runbook
 
@@ -35,14 +36,34 @@ CI, not for running the app — judge intent from its content.
 Then call submit_plan exactly once with:
 - classification: one of service | cli | library | docs | monorepo | unknown
   (use service only if there is a long-running server/app to start).
-- candidates: for a `service`, 1-3 ordered run plans, best first, each:
+- candidates: for a `service`, 1-3 ordered run plans, best first.
+
+  A project is often a SYSTEM of components (frontend + backend + db + cache +
+  worker + ...), not one process. When more than one process must run, describe
+  each as a component. Each candidate is:
     {"image": "<docker image>", "setup": ["<cmds>"], "start": "<foreground start cmd>",
      "port": <int>,
-     "services": [{"name": "postgres", "image": "postgres:16",
-                   "env": {"POSTGRES_PASSWORD": "app"}, "healthcheck": "pg_isready -U postgres"}],
-     "env": {"DATABASE_URL": "postgresql://postgres:app@postgres:5432/postgres"}}
-  Include `services` for external deps the app needs (db/cache/broker) and `env`
-  for the vars it requires (reference services by name as host). Omit if none.
+     "components": [
+       {"name": "db", "role": "database", "image": "postgres:16",
+        "env": {"POSTGRES_PASSWORD": "app"},
+        "oracle": {"type": "native-cmd", "command": "pg_isready -U postgres"}},
+       {"name": "backend", "role": "backend", "image": "python:3.11",
+        "workdir": "/workspace/repo", "command": "uvicorn app:app --host 0.0.0.0 --port 8000",
+        "ports": [8000], "depends_on": ["db"],
+        "env": {"DATABASE_URL": "postgresql://postgres:app@db:5432/postgres"},
+        "oracle": {"type": "http", "port": 8000, "path": "/health"}}
+     ]}
+  Wire components to each other by service NAME as host (e.g. db, redis). Give each
+  component a readiness oracle describing what "ready" means for it:
+    - http {port, path}            an HTTP endpoint answers
+    - tcp-port {port}              a port accepts connections
+    - native-cmd {command}        a command in the image succeeds (db/cache probes)
+    - log-ready {pattern}         a line appears in its logs
+    - process-up                  it stays running
+    - exit-zero                   it runs to a clean exit (batch)
+  A component with a `command` runs repo code; one without (db/cache) is a managed
+  image. For a SINGLE-container service you may instead give just image/setup/start/
+  port (+ optional legacy `services`/`env`), and it is treated as one component.
   For non-services, candidates is [].
 Output nothing else; do all reasoning via tool calls then submit_plan."""
 
@@ -56,7 +77,12 @@ class PlanResult:
 
 
 def _to_runbook(candidate: dict, repo: dict, index: int) -> dict | None:
-    if not (isinstance(candidate, dict) and candidate.get("image") and candidate.get("start")):
+    if not isinstance(candidate, dict):
+        return None
+    components = _to_components(candidate.get("components"))
+    if components:
+        return _to_component_runbook(candidate, components, repo, index)
+    if not (candidate.get("image") and candidate.get("start")):
         return None
     try:
         port = int(candidate.get("port", 8000))
@@ -94,6 +120,91 @@ def _to_runbook(candidate: dict, repo: dict, index: int) -> dict | None:
     except SchemaValidationError:
         return None
     return runbook
+
+
+def _to_component_runbook(
+    candidate: dict, components: list[dict], repo: dict, index: int
+) -> dict | None:
+    """Build a component Run Plan runbook (#40). The legacy runtime/steps/healthcheck
+    the schema requires are synthesized from the primary app-like component (the one
+    the executor would probe first) so a component runbook is a superset, not a
+    separate shape; the verify phase drives it off ``components``."""
+    primary = next((c for c in components if "command" in c), None)
+    if primary is None:
+        return None  # a system with no repo-code component is not runnable
+    primary_ports = primary.get("ports") or [8000]
+    runbook = {
+        "schema_version": "v1",
+        "id": f"agent_{index}",
+        "status": "candidate",
+        "confidence": confidence(["llm_inference"]),
+        "evidence_refs": [_AGENT_EVIDENCE_ID],
+        "repo": repo,
+        "runtime": {
+            "image": primary["image"],
+            "workdir": primary.get("workdir", "/workspace/repo"),
+            "resources": {"cpu": 2, "memory": "4g", "pids": 512, "timeout_seconds": 900},
+        },
+        "steps": {"start": [{"command": primary["command"], "expected_ports": primary_ports}]},
+        "healthcheck": default_healthcheck(),
+        "components": components,
+    }
+    try:
+        validate_runbook(runbook)
+    except SchemaValidationError:
+        return None
+    return runbook
+
+
+def _to_oracle(raw: object) -> dict | None:
+    """Sanitize the agent's oracle into a schema-valid oracle, or None if invalid."""
+    if not (isinstance(raw, dict) and raw.get("type") in ORACLE_TYPES):
+        return None
+    oracle: dict = {"type": str(raw["type"])}
+    if isinstance(raw.get("port"), int):
+        oracle["port"] = raw["port"]
+    for key in ("path", "command", "pattern"):
+        if isinstance(raw.get(key), str) and raw[key]:
+            oracle[key] = raw[key]
+    return oracle
+
+
+def _to_components(raw: object) -> list[dict]:
+    """Map the agent's component dicts into schema-valid component specs (#40).
+
+    A component needs at least a name, an image, and a valid oracle. A component
+    with a ``command`` runs repo code; one without is a managed dependency image.
+    """
+    if not isinstance(raw, list):
+        return []
+    components = []
+    for item in raw:
+        if not (isinstance(item, dict) and item.get("name") and item.get("image")):
+            continue
+        oracle = _to_oracle(item.get("oracle"))
+        if oracle is None:
+            continue
+        comp: dict = {
+            "name": str(item["name"]),
+            "image": str(item["image"]),
+            "oracle": oracle,
+        }
+        if isinstance(item.get("role"), str) and item["role"]:
+            comp["role"] = item["role"]
+        if isinstance(item.get("workdir"), str) and item["workdir"]:
+            comp["workdir"] = item["workdir"]
+        if isinstance(item.get("command"), str) and item["command"]:
+            comp["command"] = item["command"]
+        ports = [p for p in (item.get("ports") or []) if isinstance(p, int)]
+        if ports:
+            comp["ports"] = ports
+        if isinstance(item.get("env"), dict):
+            comp["env"] = {str(k): str(v) for k, v in item["env"].items()}
+        deps = [str(d) for d in (item.get("depends_on") or []) if isinstance(d, str)]
+        if deps:
+            comp["depends_on"] = deps
+        components.append(comp)
+    return components
 
 
 def _to_services(raw: object) -> list[dict]:

@@ -132,3 +132,74 @@ def test_agent_returns_unknown_if_it_never_submits(tmp_path):
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="s", repo=REPO)
     assert result.candidates == []
     assert result.consulted is True
+
+
+def test_agent_decomposes_a_repo_into_components(tmp_path):
+    # a full-stack submission (db + backend) becomes a component Run Plan (#40)
+    model = FakeChatModel([
+        [_tc("submit_plan", {
+            "classification": "service",
+            "candidates": [{
+                "components": [
+                    {"name": "db", "role": "database", "image": "postgres:16",
+                     "env": {"POSTGRES_PASSWORD": "app"},
+                     "oracle": {"type": "native-cmd", "command": "pg_isready -U postgres"}},
+                    {"name": "backend", "role": "backend", "image": "python:3.11",
+                     "workdir": "/workspace/repo",
+                     "command": "uvicorn app:app --host 0.0.0.0 --port 8000",
+                     "ports": [8000], "depends_on": ["db"],
+                     "env": {"DATABASE_URL": "postgresql://postgres:app@db:5432/postgres"},
+                     "oracle": {"type": "http", "port": 8000, "path": "/health"}},
+                ],
+            }],
+            "rationale": "flask + postgres full-stack",
+        }, "t1")],
+    ])
+    result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
+
+    assert result.classification == "service"
+    rb = result.candidates[0]
+    validate_runbook(rb)
+    comps = {c["name"]: c for c in rb["components"]}
+    assert comps["db"]["oracle"]["type"] == "native-cmd"
+    assert comps["backend"]["depends_on"] == ["db"]
+    # wiring: backend points at db by service name (#42)
+    assert comps["backend"]["env"]["DATABASE_URL"].endswith("@db:5432/postgres")
+    # legacy runtime/steps synthesized from the primary (repo-code) component
+    assert rb["runtime"]["image"] == "python:3.11"
+    assert rb["steps"]["start"][0]["expected_ports"] == [8000]
+
+
+def test_agent_component_plan_needs_a_repo_code_component(tmp_path):
+    # only a managed image, no component that runs the repo -> not runnable, dropped
+    model = FakeChatModel([
+        [_tc("submit_plan", {
+            "classification": "service",
+            "candidates": [{
+                "components": [
+                    {"name": "db", "image": "postgres:16",
+                     "oracle": {"type": "native-cmd", "command": "pg_isready"}},
+                ],
+            }],
+        }, "t1")],
+    ])
+    result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
+    assert result.candidates == []
+
+
+def test_agent_drops_component_with_invalid_oracle(tmp_path):
+    model = FakeChatModel([
+        [_tc("submit_plan", {
+            "classification": "service",
+            "candidates": [{
+                "components": [
+                    {"name": "backend", "image": "python:3.11", "workdir": "/workspace/repo",
+                     "command": "python app.py", "ports": [8000],
+                     "oracle": {"type": "telepathy"}},  # invalid -> component dropped
+                ],
+            }],
+        }, "t1")],
+    ])
+    result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
+    # the only component was dropped -> no valid components -> candidate dropped
+    assert result.candidates == []
