@@ -43,32 +43,38 @@ class LangChainModelClient:
         # imported lazily so the deterministic pipeline needn't load LangChain
         from langchain.chat_models import init_chat_model
 
-        self._model = init_chat_model(
-            model.model_id,
-            model_provider=model.provider,
-            temperature=model.temperature,
-            max_tokens=model.max_tokens,
-        )
+        self._model = init_chat_model(model.model_id, **_init_kwargs(model))
 
     def complete(self, prompt: str) -> str:
         content = self._model.invoke(prompt).content
         return content if isinstance(content, str) else str(content)
 
 
+def _init_kwargs(model: ModelConfig) -> dict:
+    """Kwargs for init_chat_model — includes base_url/api_key only when set, so a
+    custom OpenAI-compatible endpoint (gateway/proxy/vLLM/Ollama) can be configured."""
+    kwargs: dict = {
+        "model_provider": model.provider,
+        "temperature": model.temperature,
+        "max_tokens": model.max_tokens,
+    }
+    if model.base_url:
+        kwargs["base_url"] = model.base_url
+    if model.api_key:
+        kwargs["api_key"] = model.api_key
+    return kwargs
+
+
 def build_chat_model(config: Config):
     """Return a raw provider-agnostic chat model for tool-calling (the plan agent).
 
-    Uses LangChain init_chat_model so the provider is swappable by config; the
-    provider's API key is read at call time. Construction needs no key.
+    Uses LangChain init_chat_model so the provider is swappable by config; a custom
+    endpoint is set via base_url. The API key is read at call time (env var) unless
+    an explicit api_key override is configured. Construction needs no key.
     """
     from langchain.chat_models import init_chat_model
 
-    return init_chat_model(
-        config.model.model_id,
-        model_provider=config.model.provider,
-        temperature=config.model.temperature,
-        max_tokens=config.model.max_tokens,
-    )
+    return init_chat_model(config.model.model_id, **_init_kwargs(config.model))
 
 
 def build_model_client(config: Config, *, replay: list[str] | None = None) -> ModelClient:

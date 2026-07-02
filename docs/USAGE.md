@@ -51,6 +51,8 @@ URL, another remote, or a local path / `file://` URL.
 | `REPO_PILOT_MODEL_ID` | `claude-opus-4-8` | Model id for the LLM fallback seam. |
 | `REPO_PILOT_MODEL_TEMPERATURE` | `0.0` | Sampling temperature. |
 | `REPO_PILOT_MODEL_MAX_TOKENS` | `2048` | Max output tokens. |
+| `REPO_PILOT_MODEL_BASE_URL` | — | Custom endpoint (OpenAI-compatible gateway/proxy, vLLM, Ollama, internal LLM gateway). |
+| `REPO_PILOT_MODEL_API_KEY` | — | Explicit API key override (else the provider's default env var below is used). |
 | `<PROVIDER>_API_KEY` | — | The provider's API key, read at call time (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
 | `REPO_PILOT_SCHEMAS_DIR` | bundled `schemas/` | Override the JSON Schema directory. |
 
@@ -67,6 +69,20 @@ it (ADR-0004). The model layer is provider-agnostic via LangChain
   `pip install -e '.[openai]'` / `'.[google]'`.
 - If no API key is set (or the seam can't be built), the run **degrades to
   deterministic-only** — no crash. Use `--no-llm` to disable it explicitly.
+
+**Custom / self-hosted endpoints.** Point at any OpenAI-compatible server (vLLM,
+Ollama, LM Studio, an internal gateway) via `REPO_PILOT_MODEL_BASE_URL` +
+`REPO_PILOT_MODEL_API_KEY`:
+
+```bash
+pip install -e '.[openai]'
+export REPO_PILOT_MODEL_PROVIDER=openai
+export REPO_PILOT_MODEL_ID=your-model-name
+export REPO_PILOT_MODEL_BASE_URL=https://your-gateway/v1
+export REPO_PILOT_MODEL_API_KEY=sk-...      # or a placeholder for keyless local servers
+```
+(Any provider `init_chat_model` supports works the same way; `base_url`/`api_key`
+are forwarded to it. Note: the plan agent needs a model that supports tool calling.)
 
 ## Outputs
 
