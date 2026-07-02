@@ -68,6 +68,13 @@ def service_hardening(resources: dict | None = None) -> dict:
     }
 
 
+def resource_limits_only(hardening: dict) -> dict:
+    """The subset of hardening safe for trusted managed images (ADR-0017): resource
+    limits, but not cap_drop / no-new-privileges / non-root (which break images that
+    setuid at startup, e.g. postgres)."""
+    return {k: v for k, v in hardening.items() if k in ("mem_limit", "cpus", "pids_limit")}
+
+
 def dummy_env(repo_dir: str | Path) -> dict[str, str]:
     """Generate dummy values for variables named in .env.example (§20.2)."""
     example = Path(repo_dir) / ".env.example"

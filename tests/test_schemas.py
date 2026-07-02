@@ -75,3 +75,26 @@ def test_runbook_requires_a_start_step():
     bad = {**VALID_RUNBOOK, "steps": {"start": []}}  # minItems 1
     with pytest.raises(SchemaValidationError):
         validate_runbook(bad)
+
+
+def test_runbook_accepts_a_component_run_plan():
+    rb = {
+        **VALID_RUNBOOK,
+        "components": [
+            {"name": "db", "image": "postgres:16",
+             "oracle": {"type": "native-cmd", "command": "pg_isready -U app"}},
+            {"name": "backend", "image": "python:3.11", "command": "uvicorn app:app",
+             "ports": [8000], "depends_on": ["db"],
+             "oracle": {"type": "http", "port": 8000, "path": "/health"}},
+        ],
+    }
+    validate_runbook(rb)
+
+
+def test_runbook_rejects_unknown_oracle_type():
+    bad = {
+        **VALID_RUNBOOK,
+        "components": [{"name": "x", "image": "y", "oracle": {"type": "telepathy"}}],
+    }
+    with pytest.raises(SchemaValidationError):
+        validate_runbook(bad)

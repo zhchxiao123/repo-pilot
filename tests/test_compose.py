@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from repo_pilot.compose import compile_compose, render_compose
+from repo_pilot.compose import compile_components, compile_compose, render_compose
 
 GOLDEN = Path(__file__).parent / "golden" / "express-compose.yaml"
 
@@ -52,3 +52,53 @@ def test_compiled_compose_declares_dependency_services_with_wait():
     assert compose["services"]["app"]["depends_on"] == {
         "postgres": {"condition": "service_healthy"}
     }
+
+
+# --- component model (#37/#38) ---
+
+COMPONENTS = [
+    {
+        "name": "db",
+        "image": "postgres:16",
+        "env": {"POSTGRES_PASSWORD": "app"},
+        "oracle": {"type": "native-cmd", "command": "pg_isready -U app"},
+    },
+    {
+        "name": "backend",
+        "image": "python:3.11-bookworm",
+        "workdir": "/workspace/repo",
+        "command": "uvicorn app:app --host 0.0.0.0 --port 8000",
+        "ports": [8000],
+        "env": {"DATABASE_URL": "postgresql://app:app@db:5432/app"},
+        "depends_on": ["db"],
+        "oracle": {"type": "http", "port": 8000, "path": "/health"},
+    },
+]
+
+
+def test_compile_components_lays_out_every_component_as_a_service():
+    compose = compile_components(COMPONENTS)
+    assert set(compose["services"]) == {"db", "backend"}
+    be = compose["services"]["backend"]
+    assert be["command"] == ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 8000"]
+    assert be["ports"] == [{"target": 8000}]
+    assert be["environment"]["DATABASE_URL"].endswith("@db:5432/app")
+
+
+def test_compile_components_waits_for_dependencies_via_healthcheck():
+    compose = compile_components(COMPONENTS)
+    # db has a native-cmd healthcheck; backend waits for it to be healthy
+    assert compose["services"]["db"]["healthcheck"]["test"] == ["CMD-SHELL", "pg_isready -U app"]
+    assert compose["services"]["backend"]["depends_on"] == {
+        "db": {"condition": "service_healthy"}
+    }
+
+
+def test_compile_components_hardens_app_components_but_not_image_deps():
+    compose = compile_components(COMPONENTS)
+    # backend runs repo code (has a command) -> full hardening
+    assert compose["services"]["backend"]["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in compose["services"]["backend"]["security_opt"]
+    # db is a trusted managed image (no repo command) -> resource limits only
+    assert "cap_drop" not in compose["services"]["db"]
+    assert "mem_limit" in compose["services"]["db"]
