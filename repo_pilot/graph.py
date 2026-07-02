@@ -29,6 +29,7 @@ from repo_pilot.executor import SandboxExecutor
 from repo_pilot.extractors import extract_signals
 from repo_pilot.healthcheck import run_healthcheck
 from repo_pilot.llm_planner import gather_context, propose_runbooks
+from repo_pilot.llm_profiler import enrich_profile
 from repo_pilot.model_client import ModelClient
 from repo_pilot.planner import plan
 from repo_pilot.repair import patch_fingerprint, propose_repair
@@ -125,6 +126,15 @@ def build_graph(
         prof, _ = profiler.profile(state["repo_dir"], builder)
         extract_signals(state["repo_dir"], builder)
         evidence = builder.items
+        # LLM enrichment when deterministic profiling is thin (unrecognized stack).
+        if model_client is not None and not prof.get("frameworks") and not prof.get("entrypoints"):
+            try:
+                prof, prof_evidence = enrich_profile(
+                    prof, gather_context(state["repo_dir"]), model_client
+                )
+            except Exception:
+                prof_evidence = []
+            evidence = [*evidence, *prof_evidence]
         prof["repo"] = {
             "url": state["repo_url"],
             "commit": state["repo_ref"].commit,
