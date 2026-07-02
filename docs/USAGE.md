@@ -45,7 +45,7 @@ URL, another remote, or a local path / `file://` URL.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `REPO_PILOT_COMPOSE_CMD` | `docker compose` | The compose command to invoke. Set to `sudo docker compose` if your user needs sudo for Docker, or e.g. a podman-compose wrapper. |
+| `REPO_PILOT_COMPOSE_CMD` | auto-detected | The compose command to invoke. **Auto-detected**: the `docker compose` (v2 plugin) or standalone `docker-compose` binary. Set explicitly to override, e.g. `sudo docker compose` (sudo) or a podman-compose wrapper. |
 | `REPO_PILOT_ARTIFACTS_ROOT` | `artifacts` | Default artifacts root (overridden by `--artifacts-root`). |
 | `REPO_PILOT_MODEL_PROVIDER` | `anthropic` | Provider for the LLM fallback seam. Any LangChain `init_chat_model` provider (`anthropic`, `openai`, `google_genai`, `bedrock`, …); install that provider's package (see extras). |
 | `REPO_PILOT_MODEL_ID` | `claude-opus-4-8` | Model id for the LLM fallback seam. |
