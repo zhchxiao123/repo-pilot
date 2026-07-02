@@ -34,14 +34,21 @@ def test_app_service_is_hardened_non_root_with_limits():
     assert app["mem_limit"] and app["pids_limit"] and app["cpus"]
 
 
-def test_compiled_compose_declares_dependency_services():
+def test_compiled_compose_declares_dependency_services_with_wait():
     runbook = {
         **EXPRESS_RUNBOOK,
-        "services": [
-            {"name": "postgres", "image": "postgres:16", "env": {"POSTGRES_DB": "app"}}
-        ],
+        "services": [{
+            "name": "postgres",
+            "image": "postgres:16",
+            "env": {"POSTGRES_DB": "app"},
+            "healthcheck": {"type": "command", "command": "pg_isready -U app"},
+        }],
     }
     compose = compile_compose(runbook)
-    assert "postgres" in compose["services"]
-    assert compose["services"]["postgres"]["image"] == "postgres:16"
-    assert compose["services"]["app"]["depends_on"] == ["postgres"]
+    pg = compose["services"]["postgres"]
+    assert pg["image"] == "postgres:16"
+    # the service gets a compose healthcheck, and the app waits for it to be healthy
+    assert pg["healthcheck"]["test"] == ["CMD-SHELL", "pg_isready -U app"]
+    assert compose["services"]["app"]["depends_on"] == {
+        "postgres": {"condition": "service_healthy"}
+    }

@@ -22,3 +22,4 @@ Each ADR: Context → Decision → Consequences. Status: proposed | accepted | s
 | [0014](0014-llm-assisted-planning.md) | LLM-assisted planning for stacks the rules don't cover | accepted |
 | [0015](0015-llm-assisted-profiling.md) | LLM-assisted profiling for unrecognized stacks (superseded by 0016) | accepted |
 | [0016](0016-exploration-plan-agent.md) | Plan agent: LLM explores the repo and decides how to run it | accepted |
+| [0017](0017-environment-provisioning.md) | Environment provisioning: services, env, hardening trust boundary | accepted |

@@ -63,6 +63,31 @@ def test_agent_explores_then_submits_a_service_plan(tmp_path):
     assert model.invocations == 3  # explored twice, then submitted
 
 
+def test_agent_can_declare_services_and_env(tmp_path):
+    model = FakeChatModel([
+        [_tc("submit_plan", {
+            "classification": "service",
+            "candidates": [{
+                "image": "python:3.11-bookworm",
+                "setup": ["pip install -r requirements.txt"],
+                "start": "python app.py",
+                "port": 8000,
+                "services": [{
+                    "name": "postgres", "image": "postgres:16",
+                    "env": {"POSTGRES_PASSWORD": "app"}, "healthcheck": "pg_isready -U postgres",
+                }],
+                "env": {"DATABASE_URL": "postgresql://postgres:app@postgres:5432/postgres"},
+            }],
+        }, "t1")],
+    ])
+    result = explore_and_plan(model, _flask_repo(tmp_path), seed="s", repo=REPO)
+    rb = result.candidates[0]
+    validate_runbook(rb)
+    assert rb["services"][0]["name"] == "postgres"
+    assert rb["services"][0]["healthcheck"]["command"] == "pg_isready -U postgres"
+    assert rb["env"]["generated"]["DATABASE_URL"].startswith("postgresql://")
+
+
 def test_agent_classifies_non_service_with_no_candidates(tmp_path):
     (tmp_path / "README.md").write_text("# skills\nmarkdown files\n")
     model = FakeChatModel([
