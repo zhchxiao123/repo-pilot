@@ -204,6 +204,40 @@
           "result": { "type": "string" }
         }
       }
+    },
+
+    "components": {
+      "type": "array",
+      "description": "Component-model Run Plan (#37): a project is N first-class components, each with a start command, wiring, dependencies, and a readiness oracle. The single-app `runtime`/`services` model above is the one-component special case.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "image", "oracle"],
+        "properties": {
+          "name": { "type": "string" },
+          "role": { "type": "string", "description": "e.g. frontend, backend, db, cache, worker, mcp, cli." },
+          "image": { "type": "string" },
+          "workdir": { "type": "string" },
+          "command": { "type": "string", "description": "Foreground start command; presence marks a repo-code (untrusted) component." },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } },
+          "ports": { "type": "array", "items": { "type": "integer" } },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "oracle": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": [
+                "http", "tcp-port", "native-cmd", "log-ready", "process-up",
+                "stdio-handshake", "exit-zero", "functional-smoke",
+                "build-succeeds", "tests-pass"
+              ] },
+              "port": { "type": "integer" },
+              "path": { "type": "string" },
+              "command": { "type": "string" },
+              "pattern": { "type": "string" }
+            }
+          }
+        }
+      }
     }
   },
 

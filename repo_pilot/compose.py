@@ -12,7 +12,10 @@ from typing import Any
 
 import yaml
 
-from repo_pilot.security import service_hardening
+from repo_pilot.oracles import compose_healthcheck
+from repo_pilot.security import resource_limits_only, service_hardening
+
+_COMPONENT_RESOURCES = {"cpu": 2, "memory": "4g", "pids": 512}
 
 _STEP_PHASES = ("setup", "build", "migrate", "start")
 
@@ -32,7 +35,7 @@ def compile_compose(runbook: dict) -> dict:
     # Dependency services are trusted official images (postgres/redis/...) that we
     # choose, not untrusted repo code — so they get resource limits only. Stripping
     # caps / no-new-privileges would break images that setuid at startup (postgres).
-    dep_hardening = {k: v for k, v in hardening.items() if k in ("mem_limit", "cpus", "pids_limit")}
+    dep_hardening = resource_limits_only(hardening)
 
     app: dict[str, Any] = {
         "image": runbook["runtime"]["image"],
@@ -83,6 +86,49 @@ def compile_compose(runbook: dict) -> dict:
                 "retries": 20,
             }
         services[svc["name"]] = compiled
+
+    return {"services": services}
+
+
+def compile_components(components: list[dict]) -> dict:
+    """Compile a Run Plan's components into a multi-service compose project (#37/#38).
+
+    Every component is a first-class service. A component that runs repo code (has a
+    ``command``) is untrusted → full hardening; a pure managed image (no command,
+    e.g. a database) is trusted → resource limits only (ADR-0017). A component whose
+    oracle maps to a compose healthcheck gets one; dependents wait for it to be
+    healthy (else merely started). The repo build/mount for app components is layered
+    on by the executor (#38); this stays a pure function.
+    """
+    hardening = service_hardening(_COMPONENT_RESOURCES)
+    dep_hardening = resource_limits_only(hardening)
+    healthy = {c["name"] for c in components if compose_healthcheck(c["oracle"])}
+
+    services: dict[str, Any] = {}
+    for comp in components:
+        runs_repo_code = "command" in comp
+        service: dict[str, Any] = {
+            "image": comp["image"],
+            **(hardening if runs_repo_code else dep_hardening),
+        }
+        if "workdir" in comp:
+            service["working_dir"] = comp["workdir"]
+        if "command" in comp:
+            service["command"] = ["sh", "-c", comp["command"]]
+        if comp.get("env"):
+            service["environment"] = dict(comp["env"])
+        if comp.get("ports"):
+            service["ports"] = [{"target": p} for p in comp["ports"]]
+        hc = compose_healthcheck(comp["oracle"])
+        if hc:
+            service["healthcheck"] = hc
+        deps = comp.get("depends_on") or []
+        if deps:
+            service["depends_on"] = {
+                d: {"condition": "service_healthy" if d in healthy else "service_started"}
+                for d in deps
+            }
+        services[comp["name"]] = service
 
     return {"services": services}
 
