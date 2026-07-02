@@ -47,3 +47,39 @@ def test_component_system_verifies_in_real_docker(fixture_repo):
     finally:
         sandbox.stop()
         shutil.rmtree(repo, ignore_errors=True)
+
+
+CLI_COMPONENTS = [
+    {"name": "cli", "role": "cli", "image": "python:3.11-slim", "workdir": "/workspace/repo",
+     "command": "python cli.py --upper hello", "oracle": {"type": "functional-smoke"}},
+]
+
+LIB_COMPONENTS = [
+    {"name": "tests", "role": "library", "image": "python:3.11-slim", "workdir": "/workspace/repo",
+     "command": "pip install -q pytest && python -m pytest -q", "oracle": {"type": "tests-pass"}},
+]
+
+
+def _verify_shape(fixture_name, components, fixture_repo):
+    if shutil.which("docker") is None:
+        pytest.skip("docker not available")
+    repo = tempfile.mkdtemp()
+    shutil.copytree(fixture_repo(fixture_name), repo, dirs_exist_ok=True)
+    sandbox = DockerSandboxExecutor().start(compile_components(components), repo_dir=repo)
+    try:
+        return {c["name"]: verify_component(c, sandbox, retries=40, poll_interval=3.0)
+                for c in components}
+    finally:
+        sandbox.stop()
+        shutil.rmtree(repo, ignore_errors=True)
+
+
+def test_cli_component_verifies_by_running_a_subcommand(fixture_repo):
+    # non-service success: a CLI that runs its function and exits 0 (#41/#43)
+    results = _verify_shape("cli-min", CLI_COMPONENTS, fixture_repo)
+    assert results["cli"].passed, results["cli"].detail
+
+
+def test_library_component_verifies_when_tests_pass(fixture_repo):
+    results = _verify_shape("lib-min", LIB_COMPONENTS, fixture_repo)
+    assert results["tests"].passed, results["tests"].detail
