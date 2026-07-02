@@ -33,7 +33,7 @@ clone → profile → plan → verify ─▶ discover → test → report
 |-------|--------|------|
 | clone | `cloner.py` | shallow clone + optional commit checkout → `RepoRef` |
 | profile | `profiler.py`, `extractors.py`, `evidence.py` | detect language/framework/pkg-mgr and extract CI/README/Dockerfile/compose signals → Profile + Evidence Store |
-| plan | `planner.py`, `confidence.py` | build candidate Runbooks from evidence, ranked by confidence; deferral for compose-only repos; optional LLM fallback |
+| plan | `planner.py`, `plan_agent.py`, `explore_tools.py` | recognized stacks: deterministic candidates ranked by confidence. Otherwise the **plan agent** explores the repo with read-only tools, classifies it, and proposes ranked Runbooks (ADR-0016). Compose-only repos defer. |
 | verify | `executor.py`, `compose.py`, `healthcheck.py` | compile Runbook → compose, run it in the sandbox, healthcheck it |
 | discover | `discovery.py` | find HTTP test targets (OpenAPI, else healthcheck paths) |
 | test | `smoke.py` | run weak-oracle smoke tests against the live app |

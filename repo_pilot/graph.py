@@ -28,8 +28,8 @@ from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
 from repo_pilot.extractors import extract_signals
 from repo_pilot.healthcheck import run_healthcheck
-from repo_pilot.llm_planner import gather_context, propose_runbooks
-from repo_pilot.llm_profiler import enrich_profile
+from repo_pilot.explore_tools import RepoTools, seed_context
+from repo_pilot.plan_agent import _AGENT_EVIDENCE_ID, explore_and_plan
 from repo_pilot.model_client import ModelClient
 from repo_pilot.planner import plan
 from repo_pilot.repair import patch_fingerprint, propose_repair
@@ -55,6 +55,8 @@ class State(TypedDict, total=False):
     profile: Any
     evidence: list
     runbook: dict
+    candidates: list
+    classification: str
     deferred_reason: str | None
     attempts: list
     verified: bool
@@ -109,6 +111,7 @@ def build_graph(
     *,
     security: dict | None = None,
     model_client: ModelClient | None = None,
+    chat_model: Any = None,
     max_repair_attempts: int = 3,
     healthcheck_retries: int = 0,
     poll_interval: float = 1.0,
@@ -126,15 +129,6 @@ def build_graph(
         prof, _ = profiler.profile(state["repo_dir"], builder)
         extract_signals(state["repo_dir"], builder)
         evidence = builder.items
-        # LLM enrichment when deterministic profiling is thin (unrecognized stack).
-        if model_client is not None and not prof.get("frameworks") and not prof.get("entrypoints"):
-            try:
-                prof, prof_evidence = enrich_profile(
-                    prof, gather_context(state["repo_dir"]), model_client
-                )
-            except Exception:
-                prof_evidence = []
-            evidence = [*evidence, *prof_evidence]
         prof["repo"] = {
             "url": state["repo_url"],
             "commit": state["repo_ref"].commit,
@@ -156,38 +150,58 @@ def build_graph(
     def _plan(state: State) -> dict:
         result = plan(state["profile"], state["evidence"])
         if result.candidates:
-            # deterministic candidate wins; the LLM seam does not fire
+            # a confident deterministic candidate (recognized stack) is used directly
             return {"runbook": _enrich(result.candidates[0], state), "visited": ["plan"]}
         if result.deferred_reason:
-            # e.g. compose-only repo — deferred, not LLM-guessed (ADR-0002)
+            # e.g. compose-only repo — deferred, not guessed (ADR-0002)
             return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
 
-        # Tier-B gated LLM planning: only when deterministic rules found no
-        # candidate (e.g. a non-Node / unconventional stack). The LLM proposes full
-        # Runbook candidates from profile + evidence + files; the sandbox still
-        # verifies them. A model error (e.g. missing API key) degrades to no
-        # candidate, never a crash.
-        if model_client is not None:
-            try:
-                context = gather_context(state["repo_dir"])
-                llm_candidates, llm_evidence = propose_runbooks(
-                    state["profile"], state["evidence"], context, model_client
-                )
-            except Exception:
-                llm_candidates, llm_evidence = [], []
-            if llm_candidates:
-                evidence = [*state["evidence"], *llm_evidence]
-                for item in llm_evidence:
-                    validate_evidence(item)
-                write_evidence(state["evidence_path"], evidence)
-                best = max(llm_candidates, key=lambda c: c["confidence"])
-                return {
-                    "runbook": _enrich(best, state),
-                    "evidence": evidence,
-                    "visited": ["plan"],
-                }
+        # The stack isn't rule-recognized: the plan AGENT explores the repo itself
+        # (read-only tools) and decides. It also classifies the repo, so a
+        # non-service is reported honestly rather than as a failure. The sandbox
+        # still adjudicates any candidate it proposes (ADR-0004/0016).
+        if chat_model is None:
+            return {"deferred_reason": None, "visited": ["plan"]}
+        try:
+            agent = explore_and_plan(
+                chat_model,
+                RepoTools(state["repo_ref"].repo_dir),
+                seed_context(state["repo_dir"]),
+                state["profile"]["repo"],
+            )
+        except Exception:
+            return {"deferred_reason": None, "classification": "unknown", "visited": ["plan"]}
 
-        return {"deferred_reason": None, "visited": ["plan"]}
+        if agent.candidates:
+            ev = {
+                "id": _AGENT_EVIDENCE_ID,
+                "file": "(agent)",
+                "line": None,
+                "kind": "llm_inference",
+                "excerpt": (agent.rationale or "agent-proposed run plan")[:500],
+                "reason": "plan agent explored the repo and proposed a run plan",
+                "confidence": 0.3,
+            }
+            validate_evidence(ev)
+            evidence = [*state["evidence"], ev]
+            write_evidence(state["evidence_path"], evidence)
+            return {
+                "runbook": _enrich(agent.candidates[0], state),
+                "candidates": agent.candidates,
+                "classification": agent.classification,
+                "evidence": evidence,
+                "visited": ["plan"],
+            }
+
+        # no runnable candidate — but the agent may have classified why
+        reason = None
+        if agent.classification in ("library", "cli", "docs", "monorepo"):
+            reason = f"not-a-service:{agent.classification}"
+        return {
+            "deferred_reason": reason,
+            "classification": agent.classification,
+            "visited": ["plan"],
+        }
 
     def _verify(state: State) -> dict:
         if state.get("runbook") is None:
@@ -332,6 +346,7 @@ def build_graph(
             state["repo_ref"],
             runbook=runbook,
             deferred_reason=state.get("deferred_reason"),
+            classification=state.get("classification"),
             targets=state.get("targets"),
             tests=state.get("tests"),
         )

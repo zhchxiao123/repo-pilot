@@ -15,6 +15,7 @@ def render_report(
     repo_ref: RepoRef,
     runbook: dict | None = None,
     deferred_reason: str | None = None,
+    classification: str | None = None,
     targets: list[dict] | None = None,
     tests: list[dict] | None = None,
 ) -> str:
@@ -31,7 +32,12 @@ def render_report(
 
     if runbook is None:
         lines += ["## Runtime", ""]
-        if deferred_reason:
+        if classification:
+            lines.append(f"- Classification: {classification}")
+        if deferred_reason and deferred_reason.startswith("not-a-service:"):
+            kind = deferred_reason.split(":", 1)[1]
+            lines.append(f"- Startup method: none — this is a {kind} repo, not a runnable service")
+        elif deferred_reason:
             lines.append(f"- Status: deferred ({deferred_reason})")
         else:
             lines.append("- Status: no runnable candidate found")
