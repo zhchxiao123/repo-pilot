@@ -36,7 +36,13 @@ Then call submit_plan exactly once with:
 - classification: one of service | cli | library | docs | monorepo | unknown
   (use service only if there is a long-running server/app to start).
 - candidates: for a `service`, 1-3 ordered run plans, best first, each:
-    {"image": "<docker image>", "setup": ["<cmds>"], "start": "<foreground start cmd>", "port": <int>}
+    {"image": "<docker image>", "setup": ["<cmds>"], "start": "<foreground start cmd>",
+     "port": <int>,
+     "services": [{"name": "postgres", "image": "postgres:16",
+                   "env": {"POSTGRES_PASSWORD": "app"}, "healthcheck": "pg_isready -U postgres"}],
+     "env": {"DATABASE_URL": "postgresql://postgres:app@postgres:5432/postgres"}}
+  Include `services` for external deps the app needs (db/cache/broker) and `env`
+  for the vars it requires (reference services by name as host). Omit if none.
   For non-services, candidates is [].
 Output nothing else; do all reasoning via tool calls then submit_plan."""
 
@@ -75,11 +81,37 @@ def _to_runbook(candidate: dict, repo: dict, index: int) -> dict | None:
         },
         "healthcheck": default_healthcheck(),
     }
+
+    services = _to_services(candidate.get("services"))
+    if services:
+        runbook["services"] = services
+    env = candidate.get("env")
+    if isinstance(env, dict) and env:
+        runbook["env"] = {"generated": {str(k): str(v) for k, v in env.items()}}
+
     try:
         validate_runbook(runbook)
     except SchemaValidationError:
         return None
     return runbook
+
+
+def _to_services(raw: object) -> list[dict]:
+    """Map the agent's service dicts into schema-valid Runbook service specs."""
+    if not isinstance(raw, list):
+        return []
+    services = []
+    for item in raw:
+        if not (isinstance(item, dict) and item.get("name") and item.get("image")):
+            continue
+        svc: dict = {"name": str(item["name"]), "image": str(item["image"])}
+        if isinstance(item.get("env"), dict):
+            svc["env"] = {str(k): str(v) for k, v in item["env"].items()}
+        hc = item.get("healthcheck")
+        if isinstance(hc, str) and hc:
+            svc["healthcheck"] = {"type": "command", "command": hc}
+        services.append(svc)
+    return services
 
 
 def _build_tools(repo_tools: RepoTools):

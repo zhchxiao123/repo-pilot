@@ -29,7 +29,10 @@ def compile_compose(runbook: dict) -> dict:
     resources = runbook.get("runtime", {}).get("resources")
     hardening = service_hardening(resources)
     # dependency services keep their image's own user (e.g. postgres)
-    dep_hardening = {k: v for k, v in hardening.items() if k != "user"}
+    # Dependency services are trusted official images (postgres/redis/...) that we
+    # choose, not untrusted repo code — so they get resource limits only. Stripping
+    # caps / no-new-privileges would break images that setuid at startup (postgres).
+    dep_hardening = {k: v for k, v in hardening.items() if k in ("mem_limit", "cpus", "pids_limit")}
 
     app: dict[str, Any] = {
         "image": runbook["runtime"]["image"],
@@ -52,7 +55,16 @@ def compile_compose(runbook: dict) -> dict:
 
     dependency_services = runbook.get("services", [])
     if dependency_services:
-        app["depends_on"] = [svc["name"] for svc in dependency_services]
+        # wait for each dependency: service_healthy if it declares a healthcheck,
+        # otherwise service_started (best we can do without one).
+        app["depends_on"] = {
+            svc["name"]: {
+                "condition": "service_healthy"
+                if svc.get("healthcheck", {}).get("command")
+                else "service_started"
+            }
+            for svc in dependency_services
+        }
 
     services: dict[str, Any] = {"app": app}
     for svc in dependency_services:
@@ -62,6 +74,14 @@ def compile_compose(runbook: dict) -> dict:
         svc_ports = [{"target": p["container"]} for p in svc.get("ports", [])]
         if svc_ports:
             compiled["ports"] = svc_ports
+        hc = svc.get("healthcheck", {})
+        if hc.get("command"):
+            compiled["healthcheck"] = {
+                "test": ["CMD-SHELL", hc["command"]],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 20,
+            }
         services[svc["name"]] = compiled
 
     return {"services": services}

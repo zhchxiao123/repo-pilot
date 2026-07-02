@@ -68,6 +68,20 @@ def rule_diagnose(runbook: dict, logs: str) -> tuple[dict, str] | None:
     if "npm" in low and ("enoent" in low or "cannot find module" in low) and "npm install" not in setup:
         return _insert_setup(runbook, "npm install", front=True), "add npm install"
 
+    db_signals = ("could not connect", "connection refused", "econnrefused",
+                  "could not translate host name", "psycopg", "getaddrinfo")
+    if any(s in low for s in db_signals) and not runbook.get("services"):
+        patched = copy.deepcopy(runbook)
+        patched["services"] = [{
+            "name": "postgres",
+            "image": "postgres:16",
+            "env": {"POSTGRES_USER": "app", "POSTGRES_PASSWORD": "app", "POSTGRES_DB": "app"},
+            "healthcheck": {"type": "command", "command": "pg_isready -U app"},
+        }]
+        env = patched.setdefault("env", {}).setdefault("generated", {})
+        env.setdefault("DATABASE_URL", "postgresql://app:app@postgres:5432/app")
+        return patched, "provision postgres service"
+
     return None
 
 

@@ -32,6 +32,18 @@ def test_rule_adds_pip_install_for_module_not_found():
     assert any("pip install" in s["command"] for s in patched["steps"]["setup"])
 
 
+def test_rule_provisions_postgres_on_db_connection_failure():
+    py = {**RUNBOOK, "runtime": {"image": "python:3.11", "workdir": "/workspace/repo"},
+          "steps": {"start": [{"command": "python app.py"}]}}
+    patched, desc, source = propose_repair(
+        py, "could not connect to server: Connection refused (postgres:5432)", None
+    )
+    assert source == "rule"
+    assert patched["services"][0]["name"] == "postgres"
+    assert patched["env"]["generated"]["DATABASE_URL"].startswith("postgresql://")
+    validate_runbook(patched)
+
+
 def test_llm_repair_when_no_rule_matches():
     client = ReplayModelClient([
         json.dumps({"image": "node:20-bookworm", "setup": ["npm ci"], "start": "npm run serve", "port": 8080})
