@@ -81,7 +81,7 @@ def run(
             key_var = _PROVIDER_KEY_ENV.get(
                 config.model.provider, f"{config.model.provider.upper()}_API_KEY"
             )
-            if not os.environ.get(key_var):
+            if not (os.environ.get(key_var) or config.model.api_key):
                 click.echo(
                     f"WARNING: {key_var} is not set — the plan agent (for stacks the "
                     "rules don't recognize) will be unavailable; only rule-recognized "

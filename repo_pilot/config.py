@@ -20,6 +20,10 @@ class ModelConfig:
     model_id: str = DEFAULT_MODEL_ID
     temperature: float = 0.0
     max_tokens: int = 2048
+    # optional: a custom endpoint (OpenAI-compatible gateway/proxy, vLLM, Ollama, …)
+    # and an explicit API key override (else the provider's default env var is used).
+    base_url: str | None = None
+    api_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,12 @@ def load_config(overrides: dict | None = None) -> Config:
         model = replace(model, temperature=float(env_temperature))
     if env_max_tokens is not None:
         model = replace(model, max_tokens=int(env_max_tokens))
+    env_base_url = os.environ.get("REPO_PILOT_MODEL_BASE_URL")
+    env_api_key = os.environ.get("REPO_PILOT_MODEL_API_KEY")
+    if env_base_url is not None:
+        model = replace(model, base_url=env_base_url)
+    if env_api_key is not None:
+        model = replace(model, api_key=env_api_key)
 
     artifacts_root = os.environ.get("REPO_PILOT_ARTIFACTS_ROOT", "artifacts")
     config = Config(model=model, artifacts_root=artifacts_root)
