@@ -16,3 +16,14 @@ def test_clone_checks_out_the_requested_commit(tmp_path, git_origin):
     ref = RepoCloner().clone(str(origin), commit=first, dest=tmp_path / "work")
     assert ref.commit == first
     assert (ref.repo_dir / "VERSION").read_text() == "one\n"
+
+
+def test_clone_handles_a_relative_dest(tmp_path, git_origin, monkeypatch):
+    # regression: a relative dest (e.g. the default "artifacts/..." root) used to
+    # nest the clone and break follow-up git calls (FileNotFoundError).
+    origin, _first, second = git_origin
+    monkeypatch.chdir(tmp_path)
+    ref = RepoCloner().clone(str(origin), dest="artifacts/job-x/repo")
+    assert ref.repo_dir.is_absolute()
+    assert ref.commit == second
+    assert (ref.repo_dir / "VERSION").read_text() == "two\n"

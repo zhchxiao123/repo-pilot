@@ -37,7 +37,11 @@ class RepoCloner:
     def clone(
         self, repo_url: str, commit: str | None = None, *, dest: str | Path
     ) -> RepoRef:
-        dest = Path(dest)
+        # Resolve to an absolute path: the clone runs with cwd=dest.parent and later
+        # git calls run with cwd=dest, so a relative dest (e.g. the default
+        # "artifacts/..." root) would otherwise nest the clone and break follow-up
+        # commands. An absolute repo_dir also keeps the compose build context valid.
+        dest = Path(dest).resolve()
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         # Shallow clone the default branch; deepen only if a specific commit is needed.
