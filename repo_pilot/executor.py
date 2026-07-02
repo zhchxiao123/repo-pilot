@@ -129,6 +129,28 @@ _UP_TIMEOUT = 600
 _CMD_TIMEOUT = 60
 
 
+def _compose_works(cmd: list[str]) -> bool:
+    try:
+        return subprocess.run(
+            [*cmd, "version"], capture_output=True, timeout=15
+        ).returncode == 0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def default_compose_cmd(env: str | None = None, works=_compose_works) -> list[str]:
+    """Resolve the compose command: explicit env wins, else auto-detect the v2
+    plugin (`docker compose`) or the standalone binary (`docker-compose`)."""
+    env = env if env is not None else os.environ.get("REPO_PILOT_COMPOSE_CMD")
+    if env:
+        return env.split()
+    if works(["docker", "compose"]):
+        return ["docker", "compose"]
+    if works(["docker-compose"]):
+        return ["docker-compose"]
+    return ["docker", "compose"]  # default; a clear error is raised later if unusable
+
+
 _COMPOSE_MISCONFIG_MARKERS = (
     "unknown shorthand flag",
     "is not a docker command",
@@ -251,15 +273,16 @@ class DockerSandboxExecutor:
 
     def __init__(self, compose_cmd: list[str] | None = None):
         if compose_cmd is None:
-            env = os.environ.get("REPO_PILOT_COMPOSE_CMD")
-            compose_cmd = env.split() if env else ["docker", "compose"]
+            compose_cmd = default_compose_cmd()
         self._compose_cmd = compose_cmd
-        # the plain docker command (compose without the trailing "compose" verb),
-        # used for one-off probe containers
-        self._docker_cmd = (
-            compose_cmd[:-1] if compose_cmd and compose_cmd[-1] == "compose"
-            else ["docker"]
-        )
+        # the plain docker command (for one-off probe containers), derived from the
+        # compose command so a sudo/wrapper prefix is preserved.
+        if compose_cmd and compose_cmd[-1] == "compose":
+            self._docker_cmd = compose_cmd[:-1]  # docker compose -> docker
+        elif compose_cmd and compose_cmd[-1] == "docker-compose":
+            self._docker_cmd = [*compose_cmd[:-1], "docker"]  # [sudo] docker-compose -> [sudo] docker
+        else:
+            self._docker_cmd = ["docker"]
 
     def start(self, compose: dict, repo_dir: str | None = None) -> RunningSandbox:
         build = repo_dir is not None
