@@ -240,9 +240,12 @@ def test_repair_loop_gives_up_after_max_attempts(tmp_path, git_repo_from, fixtur
 
 
 def test_llm_planning_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
-    # a Flask app: no package.json, so deterministic planning finds nothing.
+    # a Flask app: no package.json, so deterministic profiling is thin and
+    # deterministic planning finds nothing. The client is consulted twice:
+    # first to enrich the profile, then to propose a runbook.
     origin, _commit = git_repo_from(fixture_repo("flask-min"))
     client = ReplayModelClient([
+        json.dumps({"languages": ["python"], "frameworks": ["flask"], "ports": [8000]}),
         json.dumps([
             {
                 "image": "python:3.11-bookworm",
@@ -250,13 +253,15 @@ def test_llm_planning_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture
                 "start": "python app.py",
                 "port": 8000,
             }
-        ])
+        ]),
     ])
     ex = FakeSandboxExecutor(
         ports={8000: 49000}, responses={"/": 200, "/health": 200, "/api/health": 200}
     )
     final = _run(ex, tmp_path, origin, model_client=client)
 
+    # profile was enriched by the LLM
+    assert "flask" in final["profile"]["frameworks"]
     rb = final["runbook"]
     assert rb["id"].startswith("llm_")
     assert rb["runtime"]["image"] == "python:3.11-bookworm"

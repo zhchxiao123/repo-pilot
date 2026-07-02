@@ -48,6 +48,8 @@ golden-file testable with no live tokens.
 
 ## Where LLM/agent autonomy adds value (orchestration + proposing)
 
+- **LLM-assisted profiling** (ADR-0015): when the deterministic Profile is thin,
+  enrich it with languages/frameworks/services/env/ports from the repo files.
 - **LLM-assisted planning** (ADR-0014): when deterministic rules yield no candidate
   (a stack rules don't cover), propose full Runbook candidates from profile +
   evidence + repo files. Schema-constrained; sandbox-verified.
