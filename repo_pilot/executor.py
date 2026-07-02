@@ -129,6 +129,18 @@ _UP_TIMEOUT = 600
 _CMD_TIMEOUT = 60
 
 
+_COMPOSE_MISCONFIG_MARKERS = (
+    "unknown shorthand flag",
+    "is not a docker command",
+    "'compose' is not a docker command",
+    "unknown flag",
+)
+
+
+def _looks_like_compose_misconfig(text: str) -> bool:
+    return any(m in text for m in _COMPOSE_MISCONFIG_MARKERS)
+
+
 def _app_target_ports(compose: dict) -> list[int]:
     app = compose.get("services", {}).get("app", {})
     return [p["target"] for p in app.get("ports", []) if "target" in p]
@@ -280,6 +292,17 @@ class DockerSandboxExecutor:
         up_args = [*base, "up", "-d"] + (["--build"] if build else [])
         up = _run_compose(self._compose_cmd, workdir, up_args, timeout=_UP_TIMEOUT)
         startup_log = up.stdout + up.stderr
+
+        # A misconfigured compose command (e.g. REPO_PILOT_COMPOSE_CMD="docker",
+        # dropping the `compose` subcommand) makes Docker reject our flags. That's a
+        # config error, not a repairable app failure — surface it clearly.
+        if up.returncode != 0 and _looks_like_compose_misconfig(startup_log):
+            raise DockerUnavailable(
+                f"the compose command {' '.join(self._compose_cmd)!r} was rejected by "
+                "Docker — set REPO_PILOT_COMPOSE_CMD to a valid Docker Compose "
+                "invocation (e.g. 'docker compose'). Detail: "
+                + " ".join(startup_log.split())[:200]
+            )
 
         ports: dict[int, int] = {}
         for target in _app_target_ports(compose):

@@ -8,6 +8,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from repo_pilot.compose import compile_compose
 from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 
@@ -49,6 +51,24 @@ def test_start_writes_compose_parses_ports_and_captures_logs(tmp_path):
         assert (repo / "Dockerfile.repopilot").is_file()
     finally:
         sandbox.stop()
+
+
+def test_misconfigured_compose_command_raises_clear_error(tmp_path):
+    # a compose cmd that drops the `compose` subcommand -> Docker rejects our flags;
+    # we must surface a clear config error, not a cryptic docker usage dump.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    stub = tmp_path / "bad.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "unknown shorthand flag: \'p\' in -p" >&2\n'
+        'echo "Usage:  docker [OPTIONS] COMMAND" >&2\n'
+        "exit 1\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    executor = DockerSandboxExecutor(compose_cmd=["bash", str(stub)])
+    with pytest.raises(DockerUnavailable, match="REPO_PILOT_COMPOSE_CMD"):
+        executor.start(compile_compose(RUNBOOK), repo_dir=str(repo))
 
 
 def test_missing_compose_binary_raises_docker_unavailable(tmp_path):
