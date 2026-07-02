@@ -1,0 +1,5 @@
+[
+  {"name": "express-hello", "repo_url": "https://github.com/expressjs/express", "expected": "not-a-service"},
+  {"name": "some-flask-service", "repo_url": "https://github.com/pallets/flask", "expected": "not-a-service"},
+  {"name": "a-runnable-service", "repo_url": "https://github.com/your-org/your-service", "expected": "verified"}
+]
