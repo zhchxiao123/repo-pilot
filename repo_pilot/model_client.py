@@ -55,6 +55,22 @@ class LangChainModelClient:
         return content if isinstance(content, str) else str(content)
 
 
+def build_chat_model(config: Config):
+    """Return a raw provider-agnostic chat model for tool-calling (the plan agent).
+
+    Uses LangChain init_chat_model so the provider is swappable by config; the
+    provider's API key is read at call time. Construction needs no key.
+    """
+    from langchain.chat_models import init_chat_model
+
+    return init_chat_model(
+        config.model.model_id,
+        model_provider=config.model.provider,
+        temperature=config.model.temperature,
+        max_tokens=config.model.max_tokens,
+    )
+
+
 def build_model_client(config: Config, *, replay: list[str] | None = None) -> ModelClient:
     """Return a client for the configured provider — swap providers via config only.
 

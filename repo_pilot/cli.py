@@ -6,14 +6,23 @@ the artifact store; the analysis pipeline is filled in by later slices.
 
 from __future__ import annotations
 
+import os
+
 import click
 
 from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
 from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 from repo_pilot.graph import build_graph, initial_state
-from repo_pilot.model_client import build_model_client
+from repo_pilot.model_client import build_chat_model, build_model_client
 from repo_pilot.security import default_security
+
+# provider -> the env var holding its API key (for a friendly up-front warning)
+_PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google_genai": "GOOGLE_API_KEY",
+}
 
 
 @click.group()
@@ -57,15 +66,29 @@ def run(
     if no_isolation:
         security["isolation"] = False
 
-    # Provider-agnostic LLM fallback (ADR-0005), gated: only fires when
-    # deterministic planning finds nothing. Degrades to deterministic-only if the
-    # provider backend can't be built (missing package/config).
+    # LLM (ADR-0005/0016): the plan agent explores repos the rules don't recognize;
+    # model_client backs the repair loop. Both are provider-agnostic and built from
+    # config; --no-llm (or a build failure) degrades to the deterministic path only.
     model_client = None
+    chat_model = None
     if not no_llm:
         try:
             model_client = build_model_client(config)
+            chat_model = build_chat_model(config)
         except Exception as exc:  # missing provider package, bad config, etc.
-            click.echo(f"LLM fallback disabled ({exc}); continuing deterministically.")
+            click.echo(f"LLM disabled ({exc}); running deterministic path only.")
+        else:
+            key_var = _PROVIDER_KEY_ENV.get(
+                config.model.provider, f"{config.model.provider.upper()}_API_KEY"
+            )
+            if not os.environ.get(key_var):
+                click.echo(
+                    f"WARNING: {key_var} is not set — the plan agent (for stacks the "
+                    "rules don't recognize) will be unavailable; only rule-recognized "
+                    "stacks will run."
+                )
+    else:
+        click.echo("LLM disabled (--no-llm); deterministic path only.")
 
     click.echo(f"Job: {job.job_id}")
     click.echo(f"Repo: {repo_url}" + (f" @ {commit}" if commit else ""))
@@ -76,6 +99,7 @@ def run(
         DockerSandboxExecutor(),
         security=security,
         model_client=model_client,
+        chat_model=chat_model,
         healthcheck_retries=60,
         poll_interval=2.0,
     )

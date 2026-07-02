@@ -8,6 +8,7 @@ import json
 
 import pytest
 import yaml
+from langchain_core.messages import AIMessage
 
 from repo_pilot.executor import FakeSandboxExecutor
 from repo_pilot.model_client import ReplayModelClient
@@ -239,47 +240,77 @@ def test_repair_loop_gives_up_after_max_attempts(tmp_path, git_repo_from, fixtur
     assert final["repair_attempts"] == 2  # stopped at the bound
 
 
-def test_llm_planning_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
-    # a Flask app: no package.json, so deterministic profiling is thin and
-    # deterministic planning finds nothing. The client is consulted twice:
-    # first to enrich the profile, then to propose a runbook.
+class _AgentModel:
+    """Fake tool-calling chat model: submits a scripted plan on first invoke."""
+
+    def __init__(self, plan_args):
+        self._plan = plan_args
+        self.invocations = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.invocations += 1
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": "submit_plan", "args": self._plan, "id": "s1", "type": "tool_call"}],
+        )
+
+
+def test_plan_agent_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
+    # Flask app: no package.json -> deterministic planning finds nothing -> the
+    # agent explores and proposes; the sandbox still verifies.
     origin, _commit = git_repo_from(fixture_repo("flask-min"))
-    client = ReplayModelClient([
-        json.dumps({"languages": ["python"], "frameworks": ["flask"], "ports": [8000]}),
-        json.dumps([
-            {
-                "image": "python:3.11-bookworm",
-                "setup": ["pip install -r requirements.txt"],
-                "start": "python app.py",
-                "port": 8000,
-            }
-        ]),
-    ])
+    model = _AgentModel({
+        "classification": "service",
+        "candidates": [{
+            "image": "python:3.11-bookworm",
+            "setup": ["pip install -r requirements.txt"],
+            "start": "python app.py",
+            "port": 8000,
+        }],
+        "rationale": "Flask app, app.py is the entry point",
+    })
     ex = FakeSandboxExecutor(
         ports={8000: 49000}, responses={"/": 200, "/health": 200, "/api/health": 200}
     )
-    final = _run(ex, tmp_path, origin, model_client=client)
+    final = _run(ex, tmp_path, origin, chat_model=model)
 
-    # profile was enriched by the LLM
-    assert "flask" in final["profile"]["frameworks"]
     rb = final["runbook"]
-    assert rb["id"].startswith("llm_")
+    assert rb["id"].startswith("agent_")
     assert rb["runtime"]["image"] == "python:3.11-bookworm"
     assert rb["steps"]["start"][0]["command"] == "python app.py"
-    assert rb["confidence"] == pytest.approx(0.30)
-    assert client.calls  # the model was consulted
+    assert final["classification"] == "service"
+    assert model.invocations >= 1
     assert final["verified"] is True  # subordination: sandbox still adjudicates
 
 
-def test_llm_planning_not_used_when_deterministic_candidate_exists(
+def test_agent_classifies_non_service_repo_honestly(tmp_path, git_repo_from):
+    src = tmp_path / "docsrepo"
+    src.mkdir()
+    (src / "README.md").write_text("# skills\nA collection of markdown skill files.\n")
+    (src / "one.md").write_text("skill one\n")
+    origin, _commit = git_repo_from(src)
+    model = _AgentModel({"classification": "docs", "candidates": [], "rationale": "markdown only"})
+
+    final = _run(_success_executor(), tmp_path, origin, chat_model=model)
+
+    assert final.get("runbook") is None
+    assert final["classification"] == "docs"
+    assert final["deferred_reason"] == "not-a-service:docs"
+    assert "not a runnable service" in (tmp_path / "report.md").read_text()
+
+
+def test_plan_agent_not_invoked_when_deterministic_candidate_exists(
     tmp_path, git_repo_from, fixture_repo
 ):
     origin, _commit = git_repo_from(fixture_repo("express-min"))
-    client = ReplayModelClient([json.dumps([{"image": "x", "start": "y", "port": 1}])])
-    final = _run(_success_executor(), tmp_path, origin, model_client=client)
+    model = _AgentModel({"classification": "service", "candidates": []})
+    final = _run(_success_executor(), tmp_path, origin, chat_model=model)
 
     assert final["runbook"]["id"].startswith("node_")
-    assert client.calls == []  # the LLM seam never fired
+    assert model.invocations == 0  # recognized stack -> agent not consulted
 
 
 def test_macro_phases_are_the_documented_dag():
