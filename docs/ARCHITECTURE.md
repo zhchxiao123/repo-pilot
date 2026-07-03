@@ -23,8 +23,9 @@ this document is the map.
 ## The pipeline (macro-skeleton)
 
 A LangGraph graph (ADR-0006). Each phase reads/writes a thin, typed state whose
-spine is the Runbook. The happy path is linear; `verify` uses **conditional +
-cyclic edges** for the repair loop (ADR-0012).
+spine is the canonical **Run Plan** (ADR-0019); the v1 Runbook is projected only
+at the report/artifact edge. The happy path is linear; `verify` uses
+**conditional + cyclic edges** for the repair loop (ADR-0012).
 
 ```
 clone → profile → plan → verify ─▶ discover → test → report
@@ -37,8 +38,8 @@ clone → profile → plan → verify ─▶ discover → test → report
 |-------|--------|------|
 | clone | `cloner.py` | shallow clone + optional commit checkout → `RepoRef` |
 | profile | `profiler.py`, `extractors.py`, `evidence.py` | detect language/framework/pkg-mgr and extract CI/README/Dockerfile/compose signals → Profile + Evidence Store |
-| plan | `planner.py`, `plan_agent.py`, `explore_tools.py` | recognized stacks: deterministic candidates ranked by confidence. Otherwise the **plan agent** explores the repo with read-only tools, classifies it, and proposes ranked Runbooks (ADR-0016). Compose-only repos defer. |
-| verify | `executor.py`, `compose.py`, `healthcheck.py` | compile Runbook → compose, run it in the sandbox, healthcheck it |
+| plan | `candidate_planning.py`, `shape_detection.py`, `plan_agent.py` | recognized stacks: deterministic, language-aware candidate **Run Plans** ranked by confidence. Otherwise the **plan agent** explores the repo with read-only tools, classifies it, and proposes ranked Run Plans (ADR-0016). Compose-only repos defer. |
+| verify | `run_verifier.py`, `executor.py`, `compose.py` | compile the Run Plan → compose, run it in the sandbox, adjudicate each component's oracle |
 | discover | `discovery.py` | find HTTP test targets (OpenAPI, else healthcheck paths) |
 | test | `smoke.py` | run weak-oracle smoke tests against the live app |
 | report | `report.py` | render `report.md`; persist the Verified Runbook |
@@ -54,7 +55,7 @@ Almost everything is deterministic and runs with **no LLM and no tokens**: parsi
 framework detection, the confidence formula, compose compilation, execution,
 healthcheck, discovery, and smoke tests. The LLM is a *gated fallback* — chiefly
 **LLM-assisted planning** (ADR-0014): when deterministic rules produce no candidate
-(a stack rules don't cover), the model proposes full Runbook candidates from the
+(a stack rules don't cover), the model proposes full Run Plan candidates from the
 profile + evidence + repo files, and the **sandbox still verifies** them. Details in
 [`determinism-boundary.md`](determinism-boundary.md); the confidence math in
 [`confidence-model.md`](confidence-model.md); the (planned) repair loop in

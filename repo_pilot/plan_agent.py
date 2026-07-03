@@ -18,8 +18,13 @@ from langchain_core.tools import tool
 from repo_pilot.confidence import confidence
 from repo_pilot.explore_tools import RepoTools
 from repo_pilot.oracles import ORACLE_TYPES
-from repo_pilot.planner import default_healthcheck
-from repo_pilot.schemas import SchemaValidationError, validate_runbook
+from repo_pilot.run_shape import (
+    Oracle,
+    RunComponent,
+    RunPlan,
+    infer_shape,
+    normalize_plan,
+)
 
 _AGENT_EVIDENCE_ID = "ev_agent1"
 _MAX_ITERS = 25
@@ -82,106 +87,80 @@ Output nothing else; do all reasoning via tool calls then submit_plan."""
 @dataclass
 class PlanResult:
     classification: str = "unknown"
-    candidates: list[dict] = field(default_factory=list)
+    candidates: list[RunPlan] = field(default_factory=list)
     rationale: str = ""
     consulted: bool = False  # whether the model was actually reached
 
 
-def _to_runbook(candidate: dict, repo: dict, index: int) -> dict | None:
+def _to_run_plan(candidate: dict, repo: dict, index: int) -> RunPlan | None:
+    """Convert one agent candidate into a canonical RunPlan (projection to v1 is the
+    graph's job, at the artifact edge). Returns None for an unrunnable candidate."""
     if not isinstance(candidate, dict):
         return None
-    components = _to_components(candidate.get("components"))
-    if components:
-        return _to_component_runbook(candidate, components, repo, index)
+    components = _to_run_components(candidate.get("components"))
+    if not components:
+        app = _single_app_component(candidate)
+        if app is None:
+            return None
+        deps = _to_dep_components(candidate.get("services"))
+        if deps:
+            app.depends_on = [d.name for d in deps]
+        components = [*deps, app]
+    if not any(c.command for c in components):
+        return None  # a system with no repo-code component is not runnable
+
+    plan = RunPlan(
+        id=f"agent_{index}",
+        shape=infer_shape(components),
+        confidence=confidence(["llm_inference"]),
+        evidence_refs=[_AGENT_EVIDENCE_ID],
+        repo=repo,
+        components=components,
+        source="agent",
+    )
+    try:
+        normalize_plan(plan)  # drop candidates that violate shape/oracle/image invariants
+    except ValueError:
+        return None
+    return plan
+
+
+def _single_app_component(candidate: dict) -> RunComponent | None:
+    """A single-container candidate (image/setup/start/port) as one app component;
+    setup is folded into the foreground command."""
     if not (candidate.get("image") and candidate.get("start")):
         return None
     try:
         port = int(candidate.get("port", 8000))
     except (TypeError, ValueError):
         return None  # a malformed port drops this candidate, not the whole submission
-    setup = [{"command": c} for c in candidate.get("setup", []) if isinstance(c, str)]
-    runbook = {
-        "schema_version": "v1",
-        "id": f"agent_{index}",
-        "status": "candidate",
-        "confidence": confidence(["llm_inference"]),
-        "evidence_refs": [_AGENT_EVIDENCE_ID],
-        "repo": repo,
-        "runtime": {
-            "image": str(candidate["image"]),
-            "workdir": "/workspace/repo",
-            "resources": {"cpu": 2, "memory": "4g", "pids": 512, "timeout_seconds": 900},
-        },
-        "steps": {
-            "setup": setup,
-            "start": [{"command": str(candidate["start"]), "expected_ports": [port]}],
-        },
-        "healthcheck": default_healthcheck(),
-    }
-
-    services = _to_services(candidate.get("services"))
-    if services:
-        runbook["services"] = services
+    setup = [c for c in candidate.get("setup", []) if isinstance(c, str)]
+    command = " && ".join([*setup, str(candidate["start"])])
     env = candidate.get("env")
-    if isinstance(env, dict) and env:
-        runbook["env"] = {"generated": {str(k): str(v) for k, v in env.items()}}
-
-    try:
-        validate_runbook(runbook)
-    except SchemaValidationError:
-        return None
-    return runbook
-
-
-def _to_component_runbook(
-    candidate: dict, components: list[dict], repo: dict, index: int
-) -> dict | None:
-    """Build a component Run Plan runbook (#40). The legacy runtime/steps/healthcheck
-    the schema requires are synthesized from the primary app-like component (the one
-    the executor would probe first) so a component runbook is a superset, not a
-    separate shape; the verify phase drives it off ``components``."""
-    primary = next((c for c in components if "command" in c), None)
-    if primary is None:
-        return None  # a system with no repo-code component is not runnable
-    primary_ports = primary.get("ports") or [8000]
-    runbook = {
-        "schema_version": "v1",
-        "id": f"agent_{index}",
-        "status": "candidate",
-        "confidence": confidence(["llm_inference"]),
-        "evidence_refs": [_AGENT_EVIDENCE_ID],
-        "repo": repo,
-        "runtime": {
-            "image": primary["image"],
-            "workdir": primary.get("workdir", "/workspace/repo"),
-            "resources": {"cpu": 2, "memory": "4g", "pids": 512, "timeout_seconds": 900},
-        },
-        "steps": {"start": [{"command": primary["command"], "expected_ports": primary_ports}]},
-        "healthcheck": default_healthcheck(),
-        "components": components,
-    }
-    try:
-        validate_runbook(runbook)
-    except SchemaValidationError:
-        return None
-    return runbook
+    env = {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+    return RunComponent(
+        name="app", image=str(candidate["image"]), workdir="/workspace/repo",
+        command=command, ports=[port], env=env,
+        oracle=Oracle(type="http", port=port, path="/health",
+                      acceptable_status=[200, 204, 301, 302, 404]),
+    )
 
 
-def _to_oracle(raw: object) -> dict | None:
-    """Sanitize the agent's oracle into a schema-valid oracle, or None if invalid."""
+def _to_oracle(raw: object) -> Oracle | None:
+    """Sanitize the agent's oracle into a valid Oracle, or None if invalid."""
     if not (isinstance(raw, dict) and raw.get("type") in ORACLE_TYPES):
         return None
-    oracle: dict = {"type": str(raw["type"])}
+    oracle = Oracle(type=str(raw["type"]))
     if isinstance(raw.get("port"), int):
-        oracle["port"] = raw["port"]
+        oracle.port = raw["port"]
     for key in ("path", "command", "pattern"):
         if isinstance(raw.get(key), str) and raw[key]:
-            oracle[key] = raw[key]
+            setattr(oracle, key, raw[key])
     return oracle
 
 
-def _to_components(raw: object) -> list[dict]:
-    """Map the agent's component dicts into schema-valid component specs (#40).
+def _to_run_components(raw: object) -> list[RunComponent]:
+    """Map the agent's component dicts into canonical RunComponents (#40).
 
     A component needs at least a name, an image, and a valid oracle. A component
     with a ``command`` runs repo code; one without is a managed dependency image.
@@ -195,45 +174,39 @@ def _to_components(raw: object) -> list[dict]:
         oracle = _to_oracle(item.get("oracle"))
         if oracle is None:
             continue
-        comp: dict = {
-            "name": str(item["name"]),
-            "image": str(item["image"]),
-            "oracle": oracle,
-        }
-        if isinstance(item.get("role"), str) and item["role"]:
-            comp["role"] = item["role"]
-        if isinstance(item.get("workdir"), str) and item["workdir"]:
-            comp["workdir"] = item["workdir"]
-        if isinstance(item.get("command"), str) and item["command"]:
-            comp["command"] = item["command"]
-        ports = [p for p in (item.get("ports") or []) if isinstance(p, int)]
-        if ports:
-            comp["ports"] = ports
-        if isinstance(item.get("env"), dict):
-            comp["env"] = {str(k): str(v) for k, v in item["env"].items()}
-        deps = [str(d) for d in (item.get("depends_on") or []) if isinstance(d, str)]
-        if deps:
-            comp["depends_on"] = deps
-        components.append(comp)
+        components.append(
+            RunComponent(
+                name=str(item["name"]),
+                image=str(item["image"]),
+                oracle=oracle,
+                role=str(item["role"]) if isinstance(item.get("role"), str) and item["role"] else None,
+                workdir=str(item["workdir"]) if isinstance(item.get("workdir"), str) and item["workdir"] else None,
+                command=str(item["command"]) if isinstance(item.get("command"), str) and item["command"] else None,
+                ports=[p for p in (item.get("ports") or []) if isinstance(p, int)],
+                env={str(k): str(v) for k, v in item["env"].items()} if isinstance(item.get("env"), dict) else {},
+                depends_on=[str(d) for d in (item.get("depends_on") or []) if isinstance(d, str)],
+            )
+        )
     return components
 
 
-def _to_services(raw: object) -> list[dict]:
-    """Map the agent's service dicts into schema-valid Runbook service specs."""
+def _to_dep_components(raw: object) -> list[RunComponent]:
+    """Legacy agent ``services`` -> dependency components with a native-cmd oracle."""
     if not isinstance(raw, list):
         return []
-    services = []
+    deps = []
     for item in raw:
         if not (isinstance(item, dict) and item.get("name") and item.get("image")):
             continue
-        svc: dict = {"name": str(item["name"]), "image": str(item["image"])}
-        if isinstance(item.get("env"), dict):
-            svc["env"] = {str(k): str(v) for k, v in item["env"].items()}
         hc = item.get("healthcheck")
-        if isinstance(hc, str) and hc:
-            svc["healthcheck"] = {"type": "command", "command": hc}
-        services.append(svc)
-    return services
+        deps.append(
+            RunComponent(
+                name=str(item["name"]), image=str(item["image"]), role="db",
+                env={str(k): str(v) for k, v in item["env"].items()} if isinstance(item.get("env"), dict) else {},
+                oracle=Oracle(type="native-cmd", command=hc if isinstance(hc, str) and hc else "true"),
+            )
+        )
+    return deps
 
 
 def _build_tools(repo_tools: RepoTools):
@@ -285,8 +258,8 @@ def explore_and_plan(chat_model: Any, repo_tools: RepoTools, seed: str, repo: di
                     classification = "unknown"
                 raw = args.get("candidates") or []
                 candidates = [
-                    rb for i, c in enumerate(raw)
-                    if (rb := _to_runbook(c, repo, i)) is not None
+                    plan for i, c in enumerate(raw)
+                    if (plan := _to_run_plan(c, repo, i)) is not None
                 ]
                 return PlanResult(
                     classification=classification,

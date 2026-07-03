@@ -117,8 +117,9 @@ def _profile_python(
     if tests_present and not has_cli and not has_service:
         ref = ev.add(file=manifest, kind="package_script", excerpt="tests present",
                      reason="test suite present", confidence=0.6)
+        # bare command; the planner folds in the language-appropriate install
         entrypoints.append({"type": "inferred", "file": manifest, "key": "test",
-                            "command": "pip install -e . && pytest", "evidence_refs": [ref]})
+                            "command": "pytest", "evidence_refs": [ref]})
 
 
 def _profile_go(
@@ -152,7 +153,8 @@ def _profile_make(repo_dir: Path, ev: EvidenceBuilder, entrypoints) -> None:
     # Only surface build/test targets when no richer entrypoint already exists.
     if any(e.get("key") in ("start", "test") or e.get("type") == "binary" for e in entrypoints):
         return
-    for target in ("build", "test"):
+    # `run` is a batch job (runs to completion); build/test are their own shapes.
+    for target in ("build", "test", "run"):
         if target in targets:
             ref = ev.add(file="Makefile", kind="ci_step", excerpt=f"{target}:",
                          reason=f"Makefile {target} target", confidence=0.6)

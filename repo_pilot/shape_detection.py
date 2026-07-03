@@ -122,6 +122,17 @@ def detect_shapes(profile: dict, evidence: list[dict]) -> ShapeHints:
             )
         )
 
+    if "run" in scripts and not start:
+        hints.append(
+            ShapeHint(
+                RunShape.BATCH,
+                confidence=0.55,
+                evidence_refs=_entry_refs(scripts["run"]),
+                reason="run/job target and no service start",
+                commands=[scripts["run"]["command"]],
+            )
+        )
+
     if any(e.get("kind") == "compose_service" for e in evidence):
         hints.append(
             ShapeHint(

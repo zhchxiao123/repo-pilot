@@ -259,9 +259,10 @@ class _AgentModel:
 
 
 def test_plan_agent_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
-    # Flask app: no package.json -> deterministic planning finds nothing -> the
-    # agent explores and proposes; the sandbox still verifies.
-    origin, _commit = git_repo_from(fixture_repo("flask-min"))
+    # A server with no recognizable manifest -> deterministic planning finds
+    # nothing -> the agent explores and proposes; the sandbox still verifies.
+    # (Flask/FastAPI are now handled deterministically, so they no longer miss.)
+    origin, _commit = git_repo_from(fixture_repo("custom-server"))
     model = _AgentModel({
         "classification": "service",
         "candidates": [{
@@ -280,7 +281,8 @@ def test_plan_agent_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_r
     rb = final["runbook"]
     assert rb["id"].startswith("agent_")
     assert rb["runtime"]["image"] == "python:3.11-bookworm"
-    assert rb["steps"]["start"][0]["command"] == "python app.py"
+    # setup is folded into the component command
+    assert rb["steps"]["start"][0]["command"] == "pip install -r requirements.txt && python app.py"
     assert final["classification"] == "service"
     assert model.invocations >= 1
     assert final["verified"] is True  # subordination: sandbox still adjudicates
@@ -323,3 +325,21 @@ def test_macro_phases_are_the_documented_dag():
         "test",
         "report",
     ]
+
+
+def test_graph_state_carries_canonical_plan_and_outcome(tmp_path, git_repo_from, fixture_repo):
+    # ADR-0019: the RunPlan / verification / outcome are the state spine; the v1
+    # runbook is projected only at the report edge.
+    from repo_pilot.run_shape import RunPlan
+    from repo_pilot.run_verifier import RunVerification
+    from repo_pilot.outcome import Outcome, OutcomeKind
+
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    final = _run(_success_executor(), tmp_path, origin)
+
+    assert isinstance(final["plan"], RunPlan)
+    assert isinstance(final["verification"], RunVerification)
+    assert isinstance(final["outcome"], Outcome)
+    assert final["outcome"].kind == OutcomeKind.VERIFIED
+    # the v1 runbook still exists as the persisted projection
+    assert final["runbook"]["status"] == "verified"

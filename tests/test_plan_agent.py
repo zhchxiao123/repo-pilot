@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 
 from repo_pilot.explore_tools import RepoTools
 from repo_pilot.plan_agent import explore_and_plan
-from repo_pilot.schemas import validate_runbook
+from repo_pilot.run_shape import RunShape, normalize_plan
 
 REPO = {"url": "https://x/y", "commit": "abc"}
 
@@ -56,10 +56,12 @@ def test_agent_explores_then_submits_a_service_plan(tmp_path):
     assert result.consulted is True
     assert result.classification == "service"
     assert len(result.candidates) == 1
-    rb = result.candidates[0]
-    assert rb["steps"]["start"][0]["command"] == "python app.py"
-    assert rb["steps"]["start"][0]["expected_ports"] == [8000]
-    validate_runbook(rb)
+    plan = result.candidates[0]
+    assert plan.shape == RunShape.SERVICE
+    app = plan.components[0]
+    assert app.command == "pip install -r requirements.txt && python app.py"  # setup folded
+    assert app.ports == [8000]
+    normalize_plan(plan)
     assert model.invocations == 3  # explored twice, then submitted
 
 
@@ -81,11 +83,13 @@ def test_agent_can_declare_services_and_env(tmp_path):
         }, "t1")],
     ])
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="s", repo=REPO)
-    rb = result.candidates[0]
-    validate_runbook(rb)
-    assert rb["services"][0]["name"] == "postgres"
-    assert rb["services"][0]["healthcheck"]["command"] == "pg_isready -U postgres"
-    assert rb["env"]["generated"]["DATABASE_URL"].startswith("postgresql://")
+    plan = result.candidates[0]
+    normalize_plan(plan)
+    comps = {c.name: c for c in plan.components}
+    assert plan.shape == RunShape.MULTI_COMPONENT_SERVICE
+    assert comps["postgres"].oracle.type == "native-cmd"
+    assert comps["postgres"].oracle.command == "pg_isready -U postgres"
+    assert comps["app"].env["DATABASE_URL"].startswith("postgresql://")
 
 
 def test_agent_classifies_non_service_with_no_candidates(tmp_path):
@@ -123,7 +127,7 @@ def test_a_malformed_candidate_is_dropped_not_fatal(tmp_path):
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="s", repo=REPO)
     assert result.classification == "service"
     assert len(result.candidates) == 1
-    assert result.candidates[0]["steps"]["start"][0]["expected_ports"] == [8080]
+    assert result.candidates[0].components[0].ports == [8080]
 
 
 def test_agent_returns_unknown_if_it_never_submits(tmp_path):
@@ -158,16 +162,16 @@ def test_agent_decomposes_a_repo_into_components(tmp_path):
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
 
     assert result.classification == "service"
-    rb = result.candidates[0]
-    validate_runbook(rb)
-    comps = {c["name"]: c for c in rb["components"]}
-    assert comps["db"]["oracle"]["type"] == "native-cmd"
-    assert comps["backend"]["depends_on"] == ["db"]
+    plan = result.candidates[0]
+    normalize_plan(plan)
+    assert plan.shape == RunShape.MULTI_COMPONENT_SERVICE
+    comps = {c.name: c for c in plan.components}
+    assert comps["db"].oracle.type == "native-cmd"
+    assert comps["backend"].depends_on == ["db"]
     # wiring: backend points at db by service name (#42)
-    assert comps["backend"]["env"]["DATABASE_URL"].endswith("@db:5432/postgres")
-    # legacy runtime/steps synthesized from the primary (repo-code) component
-    assert rb["runtime"]["image"] == "python:3.11"
-    assert rb["steps"]["start"][0]["expected_ports"] == [8000]
+    assert comps["backend"].env["DATABASE_URL"].endswith("@db:5432/postgres")
+    assert comps["backend"].image == "python:3.11"
+    assert comps["backend"].ports == [8000]
 
 
 def test_agent_component_plan_needs_a_repo_code_component(tmp_path):
@@ -225,7 +229,8 @@ def test_agent_exercises_a_cli_as_a_component(tmp_path):
     result = explore_and_plan(model, _flask_repo(tmp_path), seed="tree", repo=REPO)
 
     assert result.classification == "cli"
-    rb = result.candidates[0]
-    validate_runbook(rb)
-    assert rb["components"][0]["oracle"]["type"] == "functional-smoke"
-    assert "mytool convert" in rb["steps"]["start"][0]["command"]
+    plan = result.candidates[0]
+    normalize_plan(plan)
+    assert plan.shape == RunShape.CLI
+    assert plan.components[0].oracle.type == "functional-smoke"
+    assert "mytool convert" in plan.components[0].command

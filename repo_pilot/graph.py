@@ -31,8 +31,10 @@ from repo_pilot.explore_tools import RepoTools, seed_context
 from repo_pilot.plan_agent import _AGENT_EVIDENCE_ID, explore_and_plan
 from repo_pilot.model_client import ModelClient
 from repo_pilot.candidate_planning import plan_candidates
+from repo_pilot.run_shape import normalize_plan
 from repo_pilot.run_verifier import verify_run_plan
-from repo_pilot.runbook_projection import plan_to_runbook, runbook_to_plan
+from repo_pilot.runbook_projection import plan_to_runbook
+from repo_pilot.outcome import outcome_from_verification
 from repo_pilot.repair import patch_fingerprint, propose_repair
 from repo_pilot.report import render_report
 from repo_pilot.security import default_security, dummy_env
@@ -51,11 +53,19 @@ class State(TypedDict, total=False):
     runbook_path: str
     profile_path: str
     evidence_path: str
-    # Runbook-spine slots
+    compose_path: str
+    # Canonical run-plan spine (ADR-0019): the RunPlan is the source of truth
+    # through the pipeline; the v1 runbook is projected only at report/artifact.
     repo_ref: RepoRef
     profile: Any
     evidence: list
-    runbook: dict
+    plan: Any  # RunPlan
+    verification: Any  # RunVerification
+    outcome: Any  # Outcome
+    security: dict
+    generated_env: dict
+    runbook: dict  # produced at the report phase only
+    compose: dict
     candidates: list
     classification: str
     deferred_reason: str | None
@@ -84,8 +94,9 @@ def initial_state(
     runbook_path: str,
     profile_path: str,
     evidence_path: str,
+    compose_path: str | None = None,
 ) -> State:
-    return {
+    state: State = {
         "repo_url": repo_url,
         "commit": commit,
         "repo_dir": repo_dir,
@@ -100,6 +111,9 @@ def initial_state(
         "tests": [],
         "visited": [],
     }
+    # default the compose artifact beside the report when the caller doesn't set one
+    state["compose_path"] = compose_path or str(Path(report_path).parent / "compose.generated.yaml")
+    return state
 
 
 def _reproduce(repo_url: str, runbook: dict) -> list[str]:
@@ -141,24 +155,32 @@ def build_graph(
         write_evidence(state["evidence_path"], evidence)
         return {"profile": prof, "evidence": evidence, "visited": ["profile"]}
 
-    def _enrich(runbook: dict, state: State) -> dict:
-        runbook["security"] = dict(sec)
+    def _apply_generated_env(plan, env: dict):
+        """Inject dummy .env.example values onto the repo-code components so they
+        reach the container (managed dependency images keep their own env)."""
+        for comp in plan.components:
+            if comp.command:
+                for key, value in env.items():
+                    comp.env.setdefault(key, value)
+        return plan
+
+    def _planned(plan, state: State, extra: dict) -> dict:
+        # The canonical RunPlan is the spine; security + dummy env travel in state
+        # and are projected onto the v1 runbook only at the report phase.
         env = dummy_env(state["repo_dir"])  # dummy values only — never real secrets
-        if env:
-            runbook["env"] = {"generated": env}
-        return runbook
+        return {
+            "plan": _apply_generated_env(plan, env),
+            "security": dict(sec),
+            "generated_env": env,
+            "visited": ["plan"],
+            **extra,
+        }
 
     def _plan(state: State) -> dict:
-        # Deterministic candidates are canonical RunPlans, projected to a v1
-        # runbook only for the persisted state/artifact (ADR-0019).
         result = plan_candidates(state["profile"], state["evidence"])
         if result.candidates:
-            runbook = plan_to_runbook(result.candidates[0])
-            return {
-                "runbook": _enrich(runbook, state),
-                "classification": result.classification,
-                "visited": ["plan"],
-            }
+            return _planned(result.candidates[0], state,
+                            {"classification": result.classification})
         if result.deferred_reason:
             # e.g. compose-only repo — deferred, not guessed (ADR-0002)
             return {"deferred_reason": result.deferred_reason, "visited": ["plan"]}
@@ -192,13 +214,11 @@ def build_graph(
             validate_evidence(ev)
             evidence = [*state["evidence"], ev]
             write_evidence(state["evidence_path"], evidence)
-            return {
-                "runbook": _enrich(agent.candidates[0], state),
+            return _planned(agent.candidates[0], state, {
                 "candidates": agent.candidates,
                 "classification": agent.classification,
                 "evidence": evidence,
-                "visited": ["plan"],
-            }
+            })
 
         # no runnable candidate — but the agent may have classified why
         reason = None
@@ -211,64 +231,42 @@ def build_graph(
         }
 
     def _verify(state: State) -> dict:
-        # One verifier interface (run_verifier): the runbook is imported as a
-        # canonical RunPlan and every component's oracle is adjudicated against the
-        # sandbox. This node only projects the resulting facts back onto the
-        # persisted runbook; it does not know single-app vs component semantics.
-        if state.get("runbook") is None:
+        # One verifier interface (run_verifier): adjudicate the canonical RunPlan's
+        # oracles against the sandbox. Facts (RunVerification) and the terminal
+        # Outcome live in state; the v1 runbook is projected only at report.
+        plan = state.get("plan")
+        if plan is None:
             return {"verified": False, "visited": ["verify"]}
-        runbook = dict(state["runbook"])
         result = verify_run_plan(
-            runbook_to_plan(runbook),
+            plan,
             executor,
             repo_dir=str(state["repo_ref"].repo_dir),
             retries=healthcheck_retries,
             poll_interval=poll_interval,
             sleep=sleep,
         )
-        logs = result.logs_summary
-        attempt = {"healthcheck_passed": result.verified, "logs_summary": logs}
-        verification = {
-            "healthcheck_result": {"passed": result.verified},
-            "logs_summary": logs,
-            "ports": result.ports,
-            "components": [
-                {"name": r.name, "oracle": r.oracle, "passed": r.passed, "detail": r.detail}
-                for r in result.component_results
-            ],
-        }
-        if result.verified:
-            # sandbox stays up on success so discover/test can use the live app
-            runbook["status"] = "verified"
-            verification["reproduce"] = _reproduce(state["repo_url"], runbook)
-            runbook["verification"] = verification
-            return {
-                "runbook": runbook,
-                "verified": True,
-                "attempts": [attempt],
-                "sandbox": result.sandbox,
-                "visited": ["verify"],
-            }
-        runbook["status"] = "failed"
-        runbook["verification"] = verification
-        return {
-            "runbook": runbook,
-            "verified": False,
-            "attempts": [attempt],
-            "last_logs": logs,  # fed to the repair loop
+        outcome = outcome_from_verification(normalize_plan(plan), result)
+        update: dict = {
+            "verification": result,
+            "outcome": outcome,
+            "verified": result.verified,
             "visited": ["verify"],
         }
+        if result.verified:
+            update["sandbox"] = result.sandbox  # stays up for discover/test
+        else:
+            update["last_logs"] = result.logs_summary  # fed to the repair loop
+        return update
 
     def _repair(state: State) -> dict:
-        # Cyclic agent step (ADR-0012): diagnose the failure and patch the Runbook,
-        # rules-first then LLM. Bounded by max_repair_attempts + no-repeat hashing;
-        # the sandbox re-verifies whatever we propose.
-        runbook = state.get("runbook")
-        if runbook is None:
+        # Cyclic agent step (ADR-0012): diagnose the failure and patch the canonical
+        # RunPlan, rules-first then LLM. Bounded by max_repair_attempts + no-repeat
+        # hashing; the sandbox re-verifies whatever we propose.
+        plan = state.get("plan")
+        if plan is None:
             return {"repaired": False, "visited": ["repair"]}
-        proposal = propose_repair(
-            runbook_to_plan(runbook), state.get("last_logs", ""), model_client
-        )
+        failure = state.get("verification") or state.get("last_logs", "")
+        proposal = propose_repair(plan, failure, model_client)
         if proposal is None:
             return {"repaired": False, "visited": ["repair"]}
 
@@ -287,7 +285,7 @@ def build_graph(
             "result": "applied; re-verifying",
         }
         return {
-            "runbook": _enrich(plan_to_runbook(proposal.plan), state),
+            "plan": _apply_generated_env(proposal.plan, state.get("generated_env", {})),
             "repair_attempts": attempt_no,
             "tried_patches": [*tried, fingerprint],
             "repair_history": [*history, entry],
@@ -298,7 +296,7 @@ def build_graph(
     def _route_after_verify(state: State) -> str:
         if state.get("verified"):
             return "discover"
-        if state.get("runbook") is not None and (
+        if state.get("plan") is not None and (
             state.get("repair_attempts", 0) < max_repair_attempts
         ):
             return "repair"
@@ -311,11 +309,10 @@ def build_graph(
         sandbox = state.get("sandbox")
         if sandbox is None:
             return {"visited": ["discover"]}
-        fallback = state["runbook"].get("healthcheck", {}).get("url_candidates")
         # Never let a discovery error abort the graph — the report phase must still
         # run to tear the sandbox down (avoids a container/volume leak).
         try:
-            targets = discover_targets(sandbox, fallback_paths=fallback)
+            targets = discover_targets(sandbox)  # falls back to its default paths
         except Exception:
             targets = []
         return {"targets": targets, "visited": ["discover"]}
@@ -331,18 +328,52 @@ def build_graph(
             tests = []
         return {"tests": tests, "visited": ["test"]}
 
+    def _project_runbook(state: State) -> dict | None:
+        """Project the canonical plan (+ verification facts) to a persisted v1
+        runbook. This is the single place the graph produces v1 (ADR-0019)."""
+        plan = state.get("plan")
+        if plan is None:
+            return None
+        verified = bool(state.get("verified"))
+        runbook = plan_to_runbook(plan, status="verified" if verified else "failed")
+        runbook["security"] = state.get("security", dict(sec))
+        if state.get("generated_env"):
+            runbook["env"] = {"generated": state["generated_env"]}
+        verification = state.get("verification")
+        if verification is not None:
+            rb_verification = {
+                "healthcheck_result": {"passed": verification.verified},
+                "logs_summary": verification.logs_summary,
+                "ports": verification.ports,
+                "components": [
+                    {"name": r.name, "oracle": r.oracle, "passed": r.passed, "detail": r.detail}
+                    for r in verification.component_results
+                ],
+            }
+            if verified:
+                rb_verification["reproduce"] = _reproduce(state["repo_url"], runbook)
+            runbook["verification"] = rb_verification
+        if state.get("repair_history"):
+            runbook["repair_history"] = state["repair_history"]
+        return runbook
+
     def _report(state: State) -> dict:
         sandbox = state.get("sandbox")
         if sandbox is not None:
             sandbox.stop()
-        runbook = state.get("runbook")
+        runbook = _project_runbook(state)
         if runbook is not None:
-            if state.get("repair_history"):
-                runbook["repair_history"] = state["repair_history"]
             validate_runbook(runbook)
             Path(state["runbook_path"]).write_text(
                 yaml.safe_dump(runbook, sort_keys=True)
             )
+        # Persist the generated compose so the reproduce steps point at a real file.
+        verification = state.get("verification")
+        compose_artifact = None
+        if state.get("verified") and verification is not None and verification.compose:
+            compose_path = Path(state["compose_path"])
+            compose_path.write_text(yaml.safe_dump(verification.compose, sort_keys=True))
+            compose_artifact = compose_path.name
         markdown = render_report(
             state["repo_url"],
             state["repo_ref"],
@@ -351,9 +382,13 @@ def build_graph(
             classification=state.get("classification"),
             targets=state.get("targets"),
             tests=state.get("tests"),
+            compose_artifact=compose_artifact,
         )
         Path(state["report_path"]).write_text(markdown)
-        return {"report": markdown, "visited": ["report"]}
+        result: dict = {"report": markdown, "visited": ["report"]}
+        if runbook is not None:
+            result["runbook"] = runbook  # exposed in the final state for callers
+        return result
 
     graph = StateGraph(State)
     graph.add_node("clone", _clone)

@@ -164,6 +164,34 @@ class NormalizedRunPlan:
         return []
 
 
+# role -> shape, for recovering a shape from a component decomposition.
+_ROLE_SHAPE = {
+    "cli": RunShape.CLI,
+    "library": RunShape.LIBRARY,
+    "batch": RunShape.BATCH,
+    "build": RunShape.BUILD,
+    "service": RunShape.SERVICE,
+}
+
+
+def infer_shape(components: list[RunComponent]) -> RunShape:
+    """Recover a shape from a component decomposition: component ``role`` first,
+    then an *unambiguous* oracle via ``ORACLE_PRIMARY_SHAPE``, then structural
+    (>1 component -> multi-component service), else plain service. Ambiguous
+    oracles (``exit-zero``, ``http``) never decide shape on their own."""
+    for comp in components:
+        if comp.role in _ROLE_SHAPE:
+            return _ROLE_SHAPE[comp.role]
+    for comp in components:
+        if comp.oracle is not None:
+            shape = ORACLE_PRIMARY_SHAPE.get(comp.oracle.type)
+            if shape is not None:
+                return shape
+    if len(components) > 1:
+        return RunShape.MULTI_COMPONENT_SERVICE
+    return RunShape.SERVICE
+
+
 def normalize_plan(plan: RunPlan) -> NormalizedRunPlan:
     """Validate a plan's invariants and wrap it as a ``NormalizedRunPlan``.
 
