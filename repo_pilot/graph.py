@@ -51,11 +51,13 @@ class State(TypedDict, total=False):
     runbook_path: str
     profile_path: str
     evidence_path: str
+    compose_path: str
     # Runbook-spine slots
     repo_ref: RepoRef
     profile: Any
     evidence: list
     runbook: dict
+    compose: dict
     candidates: list
     classification: str
     deferred_reason: str | None
@@ -84,8 +86,9 @@ def initial_state(
     runbook_path: str,
     profile_path: str,
     evidence_path: str,
+    compose_path: str | None = None,
 ) -> State:
-    return {
+    state: State = {
         "repo_url": repo_url,
         "commit": commit,
         "repo_dir": repo_dir,
@@ -100,6 +103,9 @@ def initial_state(
         "tests": [],
         "visited": [],
     }
+    # default the compose artifact beside the report when the caller doesn't set one
+    state["compose_path"] = compose_path or str(Path(report_path).parent / "compose.generated.yaml")
+    return state
 
 
 def _reproduce(repo_url: str, runbook: dict) -> list[str]:
@@ -247,6 +253,7 @@ def build_graph(
                 "verified": True,
                 "attempts": [attempt],
                 "sandbox": result.sandbox,
+                "compose": result.compose,  # persisted as an artifact for reproduce
                 "visited": ["verify"],
             }
         runbook["status"] = "failed"
@@ -343,6 +350,13 @@ def build_graph(
             Path(state["runbook_path"]).write_text(
                 yaml.safe_dump(runbook, sort_keys=True)
             )
+        # Persist the generated compose so the reproduce steps point at a real file.
+        compose = state.get("compose")
+        compose_artifact = None
+        if compose:
+            compose_path = Path(state["compose_path"])
+            compose_path.write_text(yaml.safe_dump(compose, sort_keys=True))
+            compose_artifact = compose_path.name
         markdown = render_report(
             state["repo_url"],
             state["repo_ref"],
@@ -351,6 +365,7 @@ def build_graph(
             classification=state.get("classification"),
             targets=state.get("targets"),
             tests=state.get("tests"),
+            compose_artifact=compose_artifact,
         )
         Path(state["report_path"]).write_text(markdown)
         return {"report": markdown, "visited": ["report"]}

@@ -239,6 +239,7 @@ def plan_candidates(
     bin_entries = [e for e in entrypoints if e.get("type") == "binary"]
     test_entries = [e for e in entrypoints if e.get("key") == "test"]
     build_entries = [e for e in entrypoints if e.get("key") == "build"]
+    run_entries = [e for e in entrypoints if e.get("key") == "run"]
 
     shape = hints.primary.shape
     if service_entries and shape == RunShape.SERVICE:
@@ -257,6 +258,11 @@ def plan_candidates(
             candidates=_exercise_plans(profile, evidence, build_entries,
                                        RunShape.BUILD, "build-succeeds", "build"),
             classification="build")
+    if run_entries and shape == RunShape.BATCH:
+        return PlanningResult(
+            candidates=_exercise_plans(profile, evidence, run_entries,
+                                       RunShape.BATCH, "exit-zero", "batch"),
+            classification="batch")
     if any(e.get("kind") == "compose_service" for e in evidence):
         return PlanningResult(deferred_reason=NEEDS_COMPOSE)
     return PlanningResult()

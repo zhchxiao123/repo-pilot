@@ -84,6 +84,19 @@ def test_component_system_verifies_when_all_oracles_pass(
     validate_runbook(yaml.safe_load((tmp_path / "runbook.yaml").read_text()))
 
 
+def test_verified_multicomponent_persists_compose_and_reproduces_it(
+    tmp_path, git_repo_from, fixture_repo, _stub_plan
+):
+    origin, _ = git_repo_from(fixture_repo("express-min"))
+    _run(_healthy_executor(), tmp_path, origin)
+
+    compose_file = tmp_path / "compose.generated.yaml"
+    assert compose_file.is_file()  # the generated stack is persisted as an artifact
+    report = (tmp_path / "report.md").read_text()
+    # reproduce references the persisted compose, not a bare `docker compose up`
+    assert "compose.generated.yaml" in report
+
+
 def test_component_system_fails_when_one_oracle_fails(
     tmp_path, git_repo_from, fixture_repo, _stub_plan
 ):

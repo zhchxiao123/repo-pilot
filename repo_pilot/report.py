@@ -36,6 +36,7 @@ def render_report(
     classification: str | None = None,
     targets: list[dict] | None = None,
     tests: list[dict] | None = None,
+    compose_artifact: str | None = None,
 ) -> str:
     outcome = _outcome_of(runbook, deferred_reason, classification)
     plan = NormalizedRunPlan(runbook_to_plan(runbook)) if runbook is not None else None
@@ -104,7 +105,17 @@ def render_report(
         lines.append("")
 
     if outcome.verified:
-        reproduce = ["git clone " + repo_url + " repo", "cd repo", *plan.reproduce_commands()]
+        multi_component = len(plan.plan.components) > 1
+        if multi_component and compose_artifact:
+            # The generated stack is persisted beside this report; bring it up from
+            # there (dependency components have no command of their own).
+            reproduce = [
+                f"git clone {repo_url} repo",
+                f"# the generated component stack is saved as {compose_artifact} in this run's artifacts",
+                f"docker compose -f {compose_artifact} up",
+            ]
+        else:
+            reproduce = ["git clone " + repo_url + " repo", "cd repo", *plan.reproduce_commands()]
         lines += ["## Reproduce", "", "```", *reproduce, "```", ""]
     else:
         logs = verification.get("logs_summary")

@@ -32,6 +32,10 @@ class Job:
         return self.dir / "runbook.yaml"
 
     @property
+    def compose_path(self) -> Path:
+        return self.dir / "compose.generated.yaml"
+
+    @property
     def report_path(self) -> Path:
         return self.dir / "report.md"
 

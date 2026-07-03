@@ -106,3 +106,22 @@ def test_makefile_build_verified_by_building(fixture_repo, tmp_path):
     v = verify_run_plan(plan, executor, repo_dir=str(tmp_path))
     assert v.verified is True
     assert outcome_from_verification(normalize_plan(plan), v).kind == OutcomeKind.VERIFIED
+
+
+# --- #55: Batch ----------------------------------------------------------------
+
+
+def test_makefile_run_job_verified_by_exit_zero(fixture_repo, tmp_path):
+    prof, ev = _profiled(fixture_repo, "make-batch")
+    assert detect_shapes(prof, ev).primary.shape == "batch"
+
+    plan = plan_candidates(prof, ev).candidates[0]
+    assert plan.shape == RunShape.BATCH
+    comp = plan.components[0]
+    assert comp.command == "make run"
+    assert comp.oracle.type == "exit-zero"
+
+    executor = FakeSandboxExecutor(states={comp.name: ("exited", None, 0)})
+    v = verify_run_plan(plan, executor, repo_dir=str(tmp_path))
+    assert v.verified is True
+    assert outcome_from_verification(normalize_plan(plan), v).kind == OutcomeKind.VERIFIED

@@ -113,6 +113,7 @@ def run(
                 runbook_path=str(job.runbook_path),
                 profile_path=str(job.profile_path),
                 evidence_path=str(job.evidence_path),
+                compose_path=str(job.compose_path),
             )
         )
     except DockerUnavailable as exc:
