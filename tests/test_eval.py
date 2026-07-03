@@ -82,7 +82,7 @@ def test_format_report_shows_coverage_and_clusters():
     cases = [EvalCase("a", "u", "verified"), EvalCase("b", "u", "verified")]
     finals = {"a": {"verified": True}, "b": {"runbook": {}, "verified": False}}
     text = format_report(evaluate(cases, _fake_run(finals)))
-    assert "Coverage: 50.0% (1/2)" in text
+    assert "Overall coverage: 50.0% (1/2)" in text
     assert "Failure clusters" in text and "verified->failed" in text
 
 
@@ -95,3 +95,47 @@ def test_load_manifest(tmp_path):
     cases = load_manifest(path)
     assert cases[0] == EvalCase("repo1", "https://x/y", "verified", "abc")
     assert cases[1].commit is None
+
+
+def test_coverage_by_shape_counts_cli_separately_from_service():
+    from repo_pilot.eval import coverage_by_shape
+
+    cases = [
+        EvalCase("svc", "u", "verified:service"),
+        EvalCase("cli", "u", "verified:cli"),
+        EvalCase("lib", "u", "verified:library"),
+    ]
+    finals = {
+        "svc": {"verified": True, "classification": "service"},   # correct
+        "cli": {"verified": True, "classification": "cli"},       # correct
+        "lib": {"runbook": {"id": "lib"}, "verified": False},     # wrong (failed)
+    }
+    by_shape = coverage_by_shape(evaluate(cases, _fake_run(finals)))
+    assert by_shape["service"] == (1, 1)
+    assert by_shape["cli"] == (1, 1)
+    assert by_shape["library"] == (0, 1)
+
+
+def test_docs_not_runnable_is_not_scored_as_failed():
+    cases = [EvalCase("docs", "u", "not_runnable:docs")]
+    finals = {"docs": {"classification": "docs", "deferred_reason": "not-a-service:docs"}}
+    report = evaluate(cases, _fake_run(finals))
+    assert report.correct == 1  # matched, not counted as a failure
+
+
+def test_failure_clusters_include_shape():
+    cases = [EvalCase("a", "u", "verified:service")]
+    finals = {"a": {"runbook": {"id": "a"}, "verified": False}}  # -> failed
+    clusters = cluster_failures(evaluate(cases, _fake_run(finals)))
+    assert "verified:service->failed" in clusters
+
+
+def test_report_shows_per_shape_coverage():
+    cases = [EvalCase("svc", "u", "verified:service"), EvalCase("cli", "u", "verified:cli")]
+    finals = {
+        "svc": {"verified": True, "classification": "service"},
+        "cli": {"verified": True, "classification": "cli"},
+    }
+    text = format_report(evaluate(cases, _fake_run(finals)))
+    assert "Service coverage" in text
+    assert "Cli coverage" in text

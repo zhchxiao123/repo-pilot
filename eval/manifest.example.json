@@ -1,5 +1,6 @@
 [
-  {"name": "express-hello", "repo_url": "https://github.com/expressjs/express", "expected": "not-a-service"},
-  {"name": "some-flask-service", "repo_url": "https://github.com/pallets/flask", "expected": "not-a-service"},
-  {"name": "a-runnable-service", "repo_url": "https://github.com/your-org/your-service", "expected": "verified"}
+  {"name": "express-service", "repo_url": "https://github.com/your-org/express-service", "expected": "verified:service"},
+  {"name": "a-python-cli", "repo_url": "https://github.com/your-org/some-cli", "expected": "verified:cli"},
+  {"name": "a-python-lib", "repo_url": "https://github.com/your-org/some-lib", "expected": "verified:library"},
+  {"name": "docs-only", "repo_url": "https://github.com/your-org/handbook", "expected": "not_runnable:docs"}
 ]

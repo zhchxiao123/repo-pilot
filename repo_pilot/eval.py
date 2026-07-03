@@ -116,6 +116,26 @@ def evaluate(cases: list[EvalCase], run_fn: Callable[[EvalCase], dict]) -> EvalR
     return EvalReport(results)
 
 
+def _expected_shape(expected: str) -> str | None:
+    """The shape a compound expected verdict targets (``verified:cli`` -> ``cli``),
+    or None for bare verdicts (failed/deferred/no_candidate/error)."""
+    expected = _ALIASES.get(expected, expected)
+    return expected.split(":", 1)[1] if ":" in expected else None
+
+
+def coverage_by_shape(report: EvalReport) -> dict[str, tuple[int, int]]:
+    """Per-shape (correct, total), so verified:cli is measured separately from
+    verified:service. Cases whose expected verdict has no shape are omitted."""
+    buckets: dict[str, tuple[int, int]] = {}
+    for r in report.results:
+        shape = _expected_shape(r.expected)
+        if shape is None:
+            continue
+        correct, total = buckets.get(shape, (0, 0))
+        buckets[shape] = (correct + (1 if r.correct else 0), total + 1)
+    return dict(sorted(buckets.items()))
+
+
 def cluster_failures(report: EvalReport) -> dict[str, list[str]]:
     """Group incorrect cases by an ``expected->actual`` signature, so the dominant
     failure modes are visible at a glance."""
@@ -131,11 +151,12 @@ def format_report(report: EvalReport) -> str:
     lines = [
         "# repo-pilot coverage eval",
         "",
-        f"- Coverage: {report.coverage:.1%} ({report.correct}/{report.total})",
-        "",
-        "## Cases",
-        "",
+        f"- Overall coverage: {report.coverage:.1%} ({report.correct}/{report.total})",
     ]
+    for shape, (correct, total) in coverage_by_shape(report).items():
+        pct = correct / total if total else 0.0
+        lines.append(f"- {shape.capitalize()} coverage: {pct:.1%} ({correct}/{total})")
+    lines += ["", "## Cases", ""]
     for r in report.results:
         mark = "OK " if r.correct else "XX "
         suffix = f" — {r.detail}" if (r.detail and not r.correct) else ""
