@@ -7,8 +7,36 @@ so a Node service component installs and starts in one foreground command.
 
 from __future__ import annotations
 
+import pytest
+
 from repo_pilot.candidate_planning import plan_candidates
+from repo_pilot.profiler import profile
 from repo_pilot.run_shape import RunShape, normalize_plan
+
+
+@pytest.mark.parametrize(
+    "fixture,shape,image,cmd_contains",
+    [
+        ("flask-min", RunShape.SERVICE, "python:3.11", "flask run"),
+        ("express-min", RunShape.SERVICE, "node:20-bookworm", "npm start"),
+        ("go-cli", RunShape.CLI, "golang:1.22", "go run ."),
+        ("python-cli", RunShape.CLI, "python:3.11", "sample"),
+        ("lib-min", RunShape.LIBRARY, "python:3.11", "pytest"),
+        ("make-build", RunShape.BUILD, "buildpack-deps:bookworm", "make build"),
+    ],
+)
+def test_plans_use_the_right_ecosystem_per_language(
+    fixture_repo, fixture, shape, image, cmd_contains
+):
+    prof, ev = profile(fixture_repo(fixture))
+    prof["repo"] = {"url": "u", "commit": "c"}
+    plan = plan_candidates(prof, ev).candidates[0]
+    comp = plan.components[0]
+    assert plan.shape == shape
+    assert comp.image == image
+    assert cmd_contains in comp.command
+    if image != "node:20-bookworm":
+        assert "npm" not in comp.command  # no accidental Node install for non-Node repos
 
 
 def _node_profile():

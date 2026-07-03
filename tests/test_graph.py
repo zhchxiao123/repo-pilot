@@ -259,9 +259,10 @@ class _AgentModel:
 
 
 def test_plan_agent_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_repo):
-    # Flask app: no package.json -> deterministic planning finds nothing -> the
-    # agent explores and proposes; the sandbox still verifies.
-    origin, _commit = git_repo_from(fixture_repo("flask-min"))
+    # A server with no recognizable manifest -> deterministic planning finds
+    # nothing -> the agent explores and proposes; the sandbox still verifies.
+    # (Flask/FastAPI are now handled deterministically, so they no longer miss.)
+    origin, _commit = git_repo_from(fixture_repo("custom-server"))
     model = _AgentModel({
         "classification": "service",
         "candidates": [{
