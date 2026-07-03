@@ -39,7 +39,7 @@ entry-point source, CI). Be skeptical: a Dockerfile or command may be for TESTS 
 CI, not for running the app — judge intent from its content.
 
 Then call submit_plan exactly once with:
-- classification: one of service | cli | library | docs | monorepo | unknown
+- classification: one of service | cli | library | build | batch | docs | monorepo | unknown
   (use service only if there is a long-running server/app to start).
 - candidates: for a `service`, 1-3 ordered run plans, best first.
 

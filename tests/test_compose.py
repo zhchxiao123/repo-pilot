@@ -124,3 +124,32 @@ def test_reproduce_compose_bakes_repo_code_components_portably():
     # managed dependency image is untouched (still pulled by image)
     assert compose["services"]["db"]["image"] == "postgres:16"
     assert "build" not in compose["services"]["db"]
+
+
+def test_reproduce_compose_runs_repo_code_writable():
+    # a verified stack must also reproduce: baked (root-owned) files need a root
+    # run user + HOME, else npm/pip install fail in the reproduced container.
+    from repo_pilot.compose import reproduce_compose
+
+    components = [
+        {"name": "db", "image": "postgres:16",
+         "oracle": {"type": "native-cmd", "command": "pg_isready"}},
+        {"name": "backend", "image": "python:3.11", "workdir": "/workspace/repo",
+         "command": "pip install -e . && uvicorn app:app",
+         "oracle": {"type": "http", "port": 8000, "path": "/health"}},
+    ]
+    compose = reproduce_compose(components)
+    backend = compose["services"]["backend"]
+    assert backend["user"] == "0:0"
+    assert backend["environment"]["HOME"] == "/tmp"
+    # managed dependency image is left as-is (keeps its own image user)
+    assert "user" not in compose["services"]["db"] or compose["services"]["db"].get("user") != "0:0"
+
+
+def test_runtime_and_reproduce_agree_on_writable_repo_code():
+    # the shared helper keeps executor runtime + reproduce compose in lockstep
+    from repo_pilot.compose import make_repo_code_writable
+
+    svc: dict = {}
+    make_repo_code_writable(svc)
+    assert svc["user"] == "0:0" and svc["environment"]["HOME"] == "/tmp"

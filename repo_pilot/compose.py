@@ -137,6 +137,22 @@ def render_compose(compose: dict) -> str:
     return yaml.safe_dump(compose, default_flow_style=False, sort_keys=True)
 
 
+def make_repo_code_writable(service: dict) -> None:
+    """Run an untrusted repo-code container as root (uid 0) with HOME set for
+    tooling caches, inside its existing hardening (ADR-0013).
+
+    Shared by the runtime executor and the reproduce compose so the two agree:
+    after ``COPY . <workdir>`` the files are root-owned, so a non-root run user
+    (the default hardening user) can't write — ``npm install`` / ``pip install``
+    then fail. Running as root inside the still-hardened container (cap_drop ALL +
+    no-new-privileges + limits) lets those write while keeping the envelope.
+    """
+    service["user"] = "0:0"
+    env = service.setdefault("environment", {})
+    if isinstance(env, dict):
+        env.setdefault("HOME", "/tmp")
+
+
 def reproduce_compose(components: list[dict], repo_context: str = "./repo") -> dict:
     """A portable compose for *reproduction* (not the executor's runtime compose).
 
@@ -163,6 +179,9 @@ def reproduce_compose(components: list[dict], repo_context: str = "./repo") -> d
             "context": repo_context,
             "dockerfile_inline": f"FROM {image}\nWORKDIR {workdir}\nCOPY . {workdir}\n",
         }
+        # same writable-repo-code setup the executor applies at runtime, so a
+        # verified stack also reproduces (npm/pip install can write).
+        make_repo_code_writable(service)
     return compose
 
 

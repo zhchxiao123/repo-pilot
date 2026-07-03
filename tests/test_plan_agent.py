@@ -244,3 +244,12 @@ def test_agent_can_classify_build_and_batch(tmp_path):
         ])
         result = explore_and_plan(model, RepoTools(tmp_path), seed="s", repo=REPO)
         assert result.classification == shape
+
+
+def test_prompt_whitelists_every_classification():
+    # the system prompt must offer the same classifications the code accepts,
+    # else the LLM won't submit build/batch (#P2)
+    from repo_pilot.plan_agent import CLASSIFICATIONS, _SYSTEM
+
+    for classification in CLASSIFICATIONS:
+        assert classification in _SYSTEM, f"{classification} missing from the prompt"

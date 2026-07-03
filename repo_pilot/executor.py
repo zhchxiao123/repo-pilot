@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from repo_pilot.compose import render_compose, with_repo_build
+from repo_pilot.compose import make_repo_code_writable, render_compose, with_repo_build
 
 
 def http_fetch(
@@ -245,12 +245,10 @@ def _app_like(service: dict) -> bool:
 
 
 def _bake_repo_container(service: dict) -> None:
-    """Run an untrusted repo-code container as root (to write its build layer) with
-    HOME set for tooling caches, inside its existing hardening (ADR-0013)."""
-    service["user"] = "0:0"
-    env = service.setdefault("environment", {})
-    if isinstance(env, dict):
-        env.setdefault("HOME", "/tmp")
+    """Make a repo-code service run its baked layer writable (root + HOME). Shared
+    with the reproduce compose via ``compose.make_repo_code_writable`` so runtime
+    and reproduce stay in lockstep (ADR-0013)."""
+    make_repo_code_writable(service)
 
 
 def _build_component_services(compose: dict, repo_dir: str) -> dict:
