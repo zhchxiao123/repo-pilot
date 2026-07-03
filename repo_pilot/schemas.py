@@ -53,3 +53,11 @@ def validate_profile(document: object) -> None:
 
 def validate_runbook(document: object) -> None:
     _validate("runbook", document)
+
+
+def validate_run_plan(document: object) -> None:
+    """Validate a canonical v2 run-plan (shape + components + oracle + outcome).
+
+    v1 ``validate_runbook`` is intentionally left untouched — v2 is an additive,
+    separate schema so v1 artifact validation cannot regress (ADR-0019)."""
+    _validate("run-plan", document)
