@@ -59,10 +59,14 @@ def _entry_refs(entry: dict) -> list[str]:
 
 def detect_shapes(profile: dict, evidence: list[dict]) -> ShapeHints:
     entrypoints = profile.get("entrypoints", [])
-    by_key: dict[str, dict] = {}
+    # Semantic keys (start/dev/test/build/run) are ecosystem-agnostic: they may
+    # come from a Node script, a Makefile target, or an inferred Python/Go entry.
+    # CLIs are marked structurally by a `binary` entrypoint.
+    scripts: dict[str, dict] = {}
     for e in entrypoints:
-        by_key.setdefault(e.get("key"), e)
-    scripts = {e["key"]: e for e in entrypoints if e.get("type") == "script"}
+        key = e.get("key")
+        if key and e.get("type") != "binary":
+            scripts.setdefault(key, e)
     bins = [e for e in entrypoints if e.get("type") == "binary"]
 
     frameworks = set(profile.get("frameworks", []))

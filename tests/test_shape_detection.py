@@ -69,3 +69,18 @@ def test_service_start_beats_a_test_script():
 def test_compose_evidence_hints_multi_component_service():
     hints = detect_shapes({"entrypoints": []}, [{"kind": "compose_service"}])
     assert hints.primary.shape == "multi_component_service"
+
+
+def _shape_of_fixture(name):
+    from repo_pilot.profiler import profile
+    from tests.conftest import FIXTURE_REPOS_DIR
+    prof, evidence = profile(FIXTURE_REPOS_DIR / name)
+    return detect_shapes(prof, evidence).primary.shape
+
+
+def test_fixtures_classify_to_expected_shapes():
+    assert _shape_of_fixture("python-cli") == "cli"
+    assert _shape_of_fixture("lib-min") == "library"
+    assert _shape_of_fixture("flask-min") == "service"
+    assert _shape_of_fixture("go-cli") == "cli"
+    assert _shape_of_fixture("make-build") == "build"
