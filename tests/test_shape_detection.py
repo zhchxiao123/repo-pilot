@@ -30,7 +30,7 @@ def test_detects_cli_from_bin_entrypoint():
     profile = {
         "languages": ["javascript"],
         "package_managers": ["npm"],
-        "entrypoints": [{"type": "bin", "key": "mytool", "command": "mytool"}],
+        "entrypoints": [{"type": "binary", "key": "mytool", "command": "mytool"}],
     }
     assert detect_shapes(profile, []).primary.shape == "cli"
 

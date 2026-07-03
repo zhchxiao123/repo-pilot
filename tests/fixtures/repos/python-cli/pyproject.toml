@@ -1,0 +1,11 @@
+[project]
+name = "sample-cli"
+version = "0.1.0"
+description = "A minimal Python CLI fixture for the run-shape vertical slice."
+
+[project.scripts]
+sample = "sample_cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

@@ -63,7 +63,7 @@ def detect_shapes(profile: dict, evidence: list[dict]) -> ShapeHints:
     for e in entrypoints:
         by_key.setdefault(e.get("key"), e)
     scripts = {e["key"]: e for e in entrypoints if e.get("type") == "script"}
-    bins = [e for e in entrypoints if e.get("type") == "bin"]
+    bins = [e for e in entrypoints if e.get("type") == "binary"]
 
     frameworks = set(profile.get("frameworks", []))
     has_web = bool(frameworks & _WEB_FRAMEWORKS)

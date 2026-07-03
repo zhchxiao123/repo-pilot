@@ -88,6 +88,48 @@ def _node_service_plans(
     return plans
 
 
+def _install_command(profile: dict) -> tuple[str, str]:
+    """(image, install-command) for the repo's primary language. Minimal: Python
+    and Node only; broader ecosystems arrive in Task 9."""
+    langs = profile.get("languages", [])
+    if "python" in langs:
+        return "python:3.11", "pip install -e ."
+    managers = profile.get("package_managers", ["npm"])
+    manager = managers[0] if managers else "npm"
+    return _NODE_IMAGE, " && ".join(s["command"] for s in _install_steps(manager))
+
+
+def _cli_plans(profile: dict, bin_entries: list[dict]) -> list[RunPlan]:
+    """A CLI is exercised by installing then running its command to a clean exit
+    (functional-smoke). One plan per declared binary."""
+    image, install = _install_command(profile)
+    repo = profile.get("repo")
+    plans: list[RunPlan] = []
+    for entry in bin_entries:
+        run = entry["command"]
+        command = f"{install} && {run}" if install else run
+        plans.append(
+            RunPlan(
+                id=f"cli_{entry.get('key', 'run')}",
+                shape=RunShape.CLI,
+                confidence=confidence(["package_script"]),
+                evidence_refs=list(entry.get("evidence_refs", [])),
+                repo=repo,
+                source="deterministic",
+                components=[
+                    RunComponent(
+                        name="cli",
+                        image=image,
+                        workdir=_WORKDIR,
+                        command=command,
+                        oracle=Oracle(type="functional-smoke"),
+                    )
+                ],
+            )
+        )
+    return plans
+
+
 def plan_candidates(
     profile: dict, evidence: list[dict], agent_result: object = None
 ) -> PlanningResult:
@@ -103,9 +145,12 @@ def plan_candidates(
         e for e in entrypoints
         if e.get("type") == "script" and e.get("key") in ("start", "dev")
     ]
+    bin_entries = [e for e in entrypoints if e.get("type") == "binary"]
     if service_entries and hints.primary.shape == RunShape.SERVICE:
         plans = _node_service_plans(profile, evidence, service_entries)
         return PlanningResult(candidates=plans, classification="service")
+    if bin_entries and hints.primary.shape == RunShape.CLI:
+        return PlanningResult(candidates=_cli_plans(profile, bin_entries), classification="cli")
     if any(e.get("kind") == "compose_service" for e in evidence):
         return PlanningResult(deferred_reason=NEEDS_COMPOSE)
     return PlanningResult()

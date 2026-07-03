@@ -9,6 +9,7 @@ Vite); more ecosystems arrive in later slices.
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 from repo_pilot.evidence import EvidenceBuilder
@@ -133,8 +134,49 @@ def profile(
             )
             entrypoints.append(
                 {
-                    "type": "bin",
+                    "type": "binary",
                     "file": "package.json",
+                    "key": name,
+                    "command": name,
+                    "evidence_refs": [ref],
+                }
+            )
+
+    # Minimal Python support: a pyproject.toml with [project.scripts] declares an
+    # installable CLI. Broader Python/Go/Make profiling is Task 9; this is only the
+    # cheap extraction that powers the CLI vertical slice.
+    pyproject = repo_dir / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            py = tomllib.loads(pyproject.read_text())
+        except tomllib.TOMLDecodeError:
+            py = {}
+        if "python" not in languages:
+            languages.append("python")
+            evidence_refs.setdefault("language:python", []).append(
+                ev.add(
+                    file="pyproject.toml",
+                    kind="package_manager",
+                    excerpt="pyproject.toml present",
+                    reason="Python project (pyproject.toml)",
+                    confidence=0.8,
+                )
+            )
+        if "pip" not in package_managers:
+            package_managers.append("pip")
+        scripts = py.get("project", {}).get("scripts", {})
+        for name in scripts:
+            ref = ev.add(
+                file="pyproject.toml",
+                kind="package_script",
+                excerpt=f"[project.scripts] {name} = {scripts[name]!r}",
+                reason=f"pyproject declares CLI script {name!r}",
+                confidence=0.8,
+            )
+            entrypoints.append(
+                {
+                    "type": "binary",
+                    "file": "pyproject.toml",
                     "key": name,
                     "command": name,
                     "evidence_refs": [ref],
