@@ -90,8 +90,8 @@ def _legacy_healthcheck(primary: RunComponent) -> dict:
     oracle = primary.oracle
     if oracle is not None and oracle.type == "http":
         hc: dict = {"strategy": "http"}
-        if oracle.path:
-            hc["url_candidates"] = [oracle.path]
+        # Deliberately no url_candidates: verify is driven by the component oracle,
+        # and target discovery falls back to its own default paths (/health, /).
         if oracle.acceptable_status:
             hc["acceptable_status"] = list(oracle.acceptable_status)
         return hc

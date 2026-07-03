@@ -9,9 +9,10 @@ import pytest
 import yaml
 
 from repo_pilot import graph as graph_module
+from repo_pilot.candidate_planning import PlanningResult
 from repo_pilot.executor import FakeSandboxExecutor
 from repo_pilot.graph import build_graph, initial_state
-from repo_pilot.planner import PlanResult
+from repo_pilot.runbook_projection import runbook_to_plan
 from repo_pilot.schemas import validate_runbook
 
 COMPONENT_RUNBOOK = {
@@ -51,8 +52,11 @@ def _run(executor, tmp_path, origin):
 def _stub_plan(monkeypatch):
     import copy
     monkeypatch.setattr(
-        graph_module, "plan",
-        lambda profile, evidence: PlanResult(candidates=[copy.deepcopy(COMPONENT_RUNBOOK)]),
+        graph_module, "plan_candidates",
+        lambda profile, evidence: PlanningResult(
+            candidates=[runbook_to_plan(copy.deepcopy(COMPONENT_RUNBOOK))],
+            classification="service",
+        ),
     )
 
 
@@ -116,8 +120,10 @@ def test_non_service_cli_verifies_by_running_to_a_clean_exit(
 ):
     import copy
     monkeypatch.setattr(
-        graph_module, "plan",
-        lambda p, e: PlanResult(candidates=[copy.deepcopy(CLI_RUNBOOK)]),
+        graph_module, "plan_candidates",
+        lambda p, e: PlanningResult(
+            candidates=[runbook_to_plan(copy.deepcopy(CLI_RUNBOOK))], classification="cli"
+        ),
     )
     # the CLI ran its subcommand and exited 0 -> functional-smoke reached
     executor = FakeSandboxExecutor(states={"cli": ("exited", None, 0)})

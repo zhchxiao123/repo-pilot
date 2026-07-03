@@ -1,9 +1,10 @@
-"""Repair Loop (ADR-0012): diagnose a failed start and patch the Runbook.
+"""Repair Loop (ADR-0012): diagnose a failed run and patch the canonical RunPlan.
 
 Rules-first (fast, deterministic, §9.2), then an LLM fallback for novel failures.
-A patch only ever edits the Runbook (never the source, ADR-0003); it is rejected if
-it would weaken the security envelope (ADR-0007); the sandbox still adjudicates —
-a patched Runbook is only kept if it actually verifies.
+A patch only ever edits the RunPlan (never the source, ADR-0003); the sandbox
+still adjudicates — a patched plan is only kept if it actually verifies. Projection
+back to the persisted v1 Runbook happens at the artifact boundary (the graph),
+not here.
 """
 
 from __future__ import annotations
@@ -11,9 +12,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import dataclass
 
 from repo_pilot.model_client import ModelClient
-from repo_pilot.schemas import SchemaValidationError, validate_runbook
+from repo_pilot.run_shape import Oracle, RunComponent, RunPlan, RunShape
+from repo_pilot.run_verifier import RunVerification
 
 _REPAIR_PROMPT = """A project failed to start in a container. Here is the run plan
 that failed and the logs. Propose a CORRECTED plan as ONE JSON object:
@@ -24,74 +27,98 @@ Only output JSON. Fix the actual cause shown in the logs.
 
 ## Failed plan
 image: {image}
-setup: {setup}
-start: {start}
+command: {command}
 
 ## Logs (tail)
 {logs}
 """
 
 
-def patch_fingerprint(runbook: dict) -> str:
-    """Stable hash of the parts a repair changes — used to reject repeated patches."""
+@dataclass
+class RepairProposal:
+    """A proposed corrected plan plus how it was derived."""
+
+    plan: RunPlan
+    description: str
+    source: str  # "rule" | "llm"
+
+
+def patch_fingerprint(plan: RunPlan) -> str:
+    """Stable hash of the parts a repair changes (each component's image/command/
+    deps) — used to reject repeated patches."""
     payload = json.dumps(
-        {"runtime": runbook.get("runtime"), "steps": runbook.get("steps")},
+        [
+            {"name": c.name, "image": c.image, "command": c.command,
+             "depends_on": sorted(c.depends_on)}
+            for c in plan.components
+        ],
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def _setup_commands(runbook: dict) -> list[str]:
-    return [s["command"] for s in runbook.get("steps", {}).get("setup", [])]
+def _primary(plan: RunPlan) -> RunComponent | None:
+    for comp in plan.components:
+        if comp.command:
+            return comp
+    return plan.components[0] if plan.components else None
 
 
-def _insert_setup(runbook: dict, command: str, *, front: bool = False) -> dict:
-    patched = copy.deepcopy(runbook)
-    steps = patched.setdefault("steps", {})
-    setup = steps.setdefault("setup", [])
-    step = {"command": command}
-    setup.insert(0, step) if front else setup.append(step)
+def _with_primary_command(plan: RunPlan, command: str) -> RunPlan:
+    patched = copy.deepcopy(plan)
+    prim = _primary(patched)
+    if prim is not None:
+        prim.command = command
     return patched
 
 
-def rule_diagnose(runbook: dict, logs: str) -> tuple[dict, str] | None:
-    """A few high-value deterministic fixes (§9.2)."""
-    setup = " ".join(_setup_commands(runbook))
+def rule_diagnose(plan: RunPlan, logs: str) -> tuple[RunPlan, str] | None:
+    """A few high-value deterministic fixes (§9.2), applied to the primary
+    repo-code component's command (setup is folded into the command)."""
+    prim = _primary(plan)
+    command = (prim.command if prim else "") or ""
     low = logs.lower()
 
-    if "pnpm" in low and "not found" in low and "corepack" not in setup:
-        return _insert_setup(runbook, "corepack enable", front=True), "insert corepack enable"
+    if "pnpm" in low and "not found" in low and "corepack" not in command:
+        return _with_primary_command(plan, f"corepack enable && {command}"), "insert corepack enable"
 
-    if ("modulenotfounderror" in low or "no module named" in low) and "pip install" not in setup:
-        return _insert_setup(runbook, "pip install -r requirements.txt"), "add pip install"
+    if ("modulenotfounderror" in low or "no module named" in low) and "pip install" not in command:
+        return _with_primary_command(plan, f"pip install -r requirements.txt && {command}"), "add pip install"
 
-    if "npm" in low and ("enoent" in low or "cannot find module" in low) and "npm install" not in setup:
-        return _insert_setup(runbook, "npm install", front=True), "add npm install"
+    if "npm" in low and ("enoent" in low or "cannot find module" in low) and "npm install" not in command:
+        return _with_primary_command(plan, f"npm install && {command}"), "add npm install"
 
     db_signals = ("could not connect", "connection refused", "econnrefused",
                   "could not translate host name", "psycopg", "getaddrinfo")
-    if any(s in low for s in db_signals) and not runbook.get("services"):
-        patched = copy.deepcopy(runbook)
-        patched["services"] = [{
-            "name": "postgres",
-            "image": "postgres:16",
-            "env": {"POSTGRES_USER": "app", "POSTGRES_PASSWORD": "app", "POSTGRES_DB": "app"},
-            "healthcheck": {"type": "command", "command": "pg_isready -U app"},
-        }]
-        env = patched.setdefault("env", {}).setdefault("generated", {})
-        env.setdefault("DATABASE_URL", "postgresql://app:app@postgres:5432/app")
+    has_db = any(c.name == "postgres" for c in plan.components)
+    if any(s in low for s in db_signals) and not has_db:
+        patched = copy.deepcopy(plan)
+        patched.components.append(
+            RunComponent(
+                name="postgres",
+                image="postgres:16",
+                role="db",
+                env={"POSTGRES_USER": "app", "POSTGRES_PASSWORD": "app", "POSTGRES_DB": "app"},
+                oracle=Oracle(type="native-cmd", command="pg_isready -U app"),
+            )
+        )
+        patched.shape = RunShape.MULTI_COMPONENT_SERVICE
+        prim = _primary(patched)
+        if prim is not None:
+            prim.env.setdefault("DATABASE_URL", "postgresql://app:app@postgres:5432/app")
+            if "postgres" not in prim.depends_on:
+                prim.depends_on.append("postgres")
         return patched, "provision postgres service"
 
     return None
 
 
-def _llm_repair(runbook: dict, logs: str, client: ModelClient) -> tuple[dict, str] | None:
-    start = runbook.get("steps", {}).get("start", [{}])[0]
+def _llm_repair(plan: RunPlan, logs: str, client: ModelClient) -> tuple[RunPlan, str] | None:
+    prim = _primary(plan)
+    if prim is None:
+        return None
     prompt = _REPAIR_PROMPT.format(
-        image=runbook.get("runtime", {}).get("image", ""),
-        setup=json.dumps(_setup_commands(runbook)),
-        start=start.get("command", ""),
-        logs=logs[-2000:],
+        image=prim.image or "", command=prim.command or "", logs=logs[-2000:]
     )
     try:
         item = json.loads(client.complete(prompt))
@@ -100,36 +127,33 @@ def _llm_repair(runbook: dict, logs: str, client: ModelClient) -> tuple[dict, st
     if not (isinstance(item, dict) and item.get("start")):
         return None
 
-    patched = copy.deepcopy(runbook)
+    setup = [c for c in item.get("setup", []) if isinstance(c, str)]
+    command = " && ".join([*setup, str(item["start"])])
+    patched = copy.deepcopy(plan)
+    new_prim = _primary(patched)
+    assert new_prim is not None
     if item.get("image"):
-        patched["runtime"]["image"] = str(item["image"])
-    patched["steps"]["setup"] = [
-        {"command": c} for c in item.get("setup", []) if isinstance(c, str)
-    ]
-    port = int(item.get("port", start.get("expected_ports", [8000])[0]))
-    patched["steps"]["start"] = [{"command": str(item["start"]), "expected_ports": [port]}]
+        new_prim.image = str(item["image"])
+    new_prim.command = command
+    if isinstance(item.get("port"), int):
+        new_prim.ports = [item["port"]]
+        if new_prim.oracle is not None and new_prim.oracle.type == "http":
+            new_prim.oracle.port = item["port"]
     return patched, "llm repair"
 
 
 def propose_repair(
-    runbook: dict, logs: str, client: ModelClient | None
-) -> tuple[dict, str, str] | None:
-    """Return (patched_runbook, description, source) or None. Rules first, then LLM."""
-    result = rule_diagnose(runbook, logs)
+    plan: RunPlan, failure: RunVerification | str, client: ModelClient | None
+) -> RepairProposal | None:
+    """Return a RepairProposal or None. Rules first, then LLM. ``failure`` may be a
+    RunVerification (its log tail is used) or a raw log string."""
+    logs = failure.logs_summary if isinstance(failure, RunVerification) else failure
+    result = rule_diagnose(plan, logs)
     source = "rule"
     if result is None and client is not None:
-        result = _llm_repair(runbook, logs, client)
+        result = _llm_repair(plan, logs, client)
         source = "llm"
     if result is None:
         return None
-
     patched, description = result
-    # never trade away the security envelope; keep the original's if present
-    if "security" in runbook:
-        patched["security"] = runbook["security"]
-    patched["status"] = "candidate"
-    try:
-        validate_runbook(patched)
-    except SchemaValidationError:
-        return None
-    return patched, description, source
+    return RepairProposal(plan=patched, description=description, source=source)

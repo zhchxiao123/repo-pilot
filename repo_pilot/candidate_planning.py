@@ -77,7 +77,7 @@ def _node_service_plans(
                         command=command,
                         ports=[port],
                         oracle=Oracle(
-                            type="http", port=port, path="/",
+                            type="http", port=port, path="/health",
                             acceptable_status=list(_ACCEPTABLE_STATUS),
                         ),
                     )
