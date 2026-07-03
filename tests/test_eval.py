@@ -16,11 +16,22 @@ from repo_pilot.eval import (
 
 
 def test_verdict_of_maps_each_terminal_state():
-    assert verdict_of({"verified": True}) == "verified"
-    assert verdict_of({"deferred_reason": "not-a-service:cli"}) == "not-a-service"
+    # Canonical compound vocabulary: verified/not_runnable carry the shape.
+    assert verdict_of({"verified": True}) == "verified:service"
+    assert verdict_of({"verified": True, "classification": "cli"}) == "verified:cli"
+    assert verdict_of({"deferred_reason": "not-a-service:cli"}) == "not_runnable:cli"
     assert verdict_of({"runbook": {"id": "x"}, "verified": False}) == "failed"
     assert verdict_of({"deferred_reason": "needs-compose"}) == "deferred"
-    assert verdict_of({}) == "no-candidate"
+    assert verdict_of({}) == "no_candidate"
+
+
+def test_matches_is_hierarchical_and_aliases_legacy_tokens():
+    from repo_pilot.eval import matches
+
+    assert matches("verified", "verified:cli")  # coarse subsumes finer
+    assert matches("not-a-service", "not_runnable:docs")  # legacy alias
+    assert not matches("verified:service", "verified:cli")  # finer is specific
+    assert not matches("verified", "failed")
 
 
 def _fake_run(mapping):
@@ -58,11 +69,11 @@ def test_cluster_failures_groups_by_expected_to_actual():
     finals = {
         "a": {"runbook": {}, "verified": False},   # verified->failed
         "b": {"runbook": {}, "verified": False},   # verified->failed
-        "c": {},                                    # verified->no-candidate
+        "c": {},                                    # verified->no_candidate
     }
     clusters = cluster_failures(evaluate(cases, _fake_run(finals)))
     assert clusters["verified->failed"] == ["a", "b"]
-    assert clusters["verified->no-candidate"] == ["c"]
+    assert clusters["verified->no_candidate"] == ["c"]
     # the dominant cluster sorts first
     assert list(clusters)[0] == "verified->failed"
 

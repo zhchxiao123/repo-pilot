@@ -8,6 +8,22 @@ test results.
 from __future__ import annotations
 
 from repo_pilot.cloner import RepoRef
+from repo_pilot.outcome import outcome_from_state
+
+
+def _outcome_of(
+    runbook: dict | None, deferred_reason: str | None, classification: str | None
+):
+    """The terminal Outcome for this report, via the shared taxonomy so the report
+    agrees with eval on what happened."""
+    return outcome_from_state(
+        {
+            "verified": bool(runbook and runbook.get("status") == "verified"),
+            "classification": classification,
+            "deferred_reason": deferred_reason,
+            "runbook": runbook,
+        }
+    )
 
 
 def render_report(
@@ -19,6 +35,7 @@ def render_report(
     targets: list[dict] | None = None,
     tests: list[dict] | None = None,
 ) -> str:
+    outcome = _outcome_of(runbook, deferred_reason, classification)
     lines = [
         "# repo-pilot report",
         "",
@@ -32,6 +49,7 @@ def render_report(
 
     if runbook is None:
         lines += ["## Runtime", ""]
+        lines.append(f"- Outcome: {outcome.verdict()}")
         if classification:
             lines.append(f"- Classification: {classification}")
         if deferred_reason and deferred_reason.startswith("not-a-service:"):
@@ -45,6 +63,7 @@ def render_report(
         return "\n".join(lines)
 
     lines += ["## Runtime", ""]
+    lines.append(f"- Outcome: {outcome.verdict()}")
     if classification:
         lines.append(f"- Classification: {classification}")
     if "confidence" in runbook:
