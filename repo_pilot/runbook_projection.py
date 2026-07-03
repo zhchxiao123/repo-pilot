@@ -129,8 +129,8 @@ def plan_to_runbook(plan: RunPlan, status: str = "candidate") -> dict:
         runbook["confidence"] = plan.confidence
     if plan.evidence_refs:
         runbook["evidence_refs"] = list(plan.evidence_refs)
-    if plan.rationale:
-        runbook["rationale"] = plan.rationale
+    # NOTE: plan.rationale is intentionally not projected — the v1 runbook schema
+    # forbids extra keys (additionalProperties: false). Rationale lives in evidence.
     return runbook
 
 
