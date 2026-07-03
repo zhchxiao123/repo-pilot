@@ -6,6 +6,9 @@ Domain terms and their precise meanings. Kept in sync as design decisions are ma
 |------|------------|
 | **Repository Profile** | Structured static-analysis result describing what a repo is (languages, frameworks, package managers, entrypoints, services, ports, env). Facts only — no chosen run command. |
 | **Evidence** | A single traceable fact backing a conclusion: `{id, file, line, excerpt, kind, reason, confidence}` (`schemas/evidence.schema.json`). Every conclusion binds via `evidence_refs`. |
+| **Run Shape** | The kind of runnable a repo is: `service`, `multi_component_service`, `cli`, `library`, `batch`, `build`, `docs` (not runnable), or `unknown`. Success is shape-specific (ADR-0019). |
+| **Run Plan** | The canonical internal model of how a repo runs: `RunPlan(shape, components[], oracle)` (`repo_pilot/run_shape.py`). The source of truth the pipeline operates on; the v1 Runbook is its persisted projection (ADR-0019). |
+| **Outcome** | The terminal shape-aware verdict: `verified` / `failed` / `deferred` / `not_runnable` / `no_candidate` / `error`, plus the shape it applies to (`repo_pilot/outcome.py`). A `cli` run to a clean exit is `verified`; a `docs` repo is `not_runnable`. |
 | **Runbook Candidate** | A proposed, not-yet-verified way to run the project, with a confidence score and fallbacks. Multiple may exist per repo. |
 | **Verified Runbook** | A Runbook Candidate that has actually started the project in the sandbox and passed a healthcheck. The system's core asset. |
 | **Sandbox** | The one-shot isolated environment where untrusted repo commands execute. In v1, a job-scoped Docker Compose project (`compose.generated.yaml`) driven by the host CLI. |

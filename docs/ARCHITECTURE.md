@@ -12,8 +12,12 @@ this document is the map.
    test pass?" are decided by actual execution, never by a model's assertion. Agents
    may *orchestrate and propose*; only deterministic tools + the sandbox *adjudicate*.
    (ADR-0004, `determinism-boundary.md`)
-3. **The Runbook is the source of truth.** Everything downstream is derived from it;
-   the compose project is a compiled artifact, regenerated each run. (ADR-0003)
+3. **The Run Plan is the internal source of truth; the Runbook is its persisted
+   projection.** The pipeline operates on a canonical `RunPlan(shape, components,
+   oracle)` (ADR-0019); the v1 Runbook remains the persisted compatibility
+   artifact, and the compose project is a compiled artifact regenerated each run.
+   (ADR-0003/0018/0019) During v1 compatibility the persisted `runbook.yaml` stays
+   v1; new code consumes `RunPlan`.
 4. **Default-untrusted.** Repo code runs in a one-shot hardened container. (ADR-0007)
 
 ## The pipeline (macro-skeleton)
