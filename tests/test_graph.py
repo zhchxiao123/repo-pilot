@@ -88,7 +88,7 @@ def test_verify_failure_yields_failure_report_with_logs(
     assert final["verified"] is False
     assert final["runbook"]["status"] == "failed"
     report = (tmp_path / "report.md").read_text()
-    assert "not verified" in report.lower()
+    assert "verdict: failed" in report.lower()
     assert "boom" in report  # captured logs surfaced in the failure report
 
 

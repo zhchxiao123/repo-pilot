@@ -150,6 +150,19 @@ class NormalizedRunPlan:
         """Components that run repo code (carry a foreground command)."""
         return [c for c in self.plan.components if c.command]
 
+    def reproduce_commands(self) -> list[str]:
+        """The in-repo commands to reproduce this run, at shape-appropriate
+        granularity. A multi-component system reproduces via compose (dependency
+        components have no command of their own); a single-component shape (cli,
+        library, build, batch, single service) reproduces via its command."""
+        if len(self.plan.components) > 1:
+            return ["docker compose up"]
+        if self.plan.components:
+            command = self.primary_component().command
+            if command:
+                return [command]
+        return []
+
 
 def normalize_plan(plan: RunPlan) -> NormalizedRunPlan:
     """Validate a plan's invariants and wrap it as a ``NormalizedRunPlan``.
