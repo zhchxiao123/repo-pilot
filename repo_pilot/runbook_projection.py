@@ -98,11 +98,20 @@ def _legacy_healthcheck(primary: RunComponent) -> dict:
     return {"strategy": "http"}
 
 
+def plan_to_components(plan: RunPlan) -> list[dict]:
+    """Project a plan's components to the v1 component-dict form.
+
+    Shared by ``plan_to_runbook`` (persistence) and ``run_verifier`` (compose),
+    so both see the same component shape and role derivation.
+    """
+    role_default = _SHAPE_ROLE.get(plan.shape)
+    return [_component_to_dict(c, role_default) for c in plan.components]
+
+
 def plan_to_runbook(plan: RunPlan, status: str = "candidate") -> dict:
     """Project a canonical ``RunPlan`` to a schema-valid v1 Runbook dict."""
     normalized = normalize_plan(plan)
     primary = normalized.primary_component()
-    role_default = _SHAPE_ROLE.get(plan.shape)
 
     runbook: dict = {
         "schema_version": "v1",
@@ -122,7 +131,7 @@ def plan_to_runbook(plan: RunPlan, status: str = "candidate") -> dict:
             ]
         },
         "healthcheck": _legacy_healthcheck(primary),
-        "components": [_component_to_dict(c, role_default) for c in plan.components],
+        "components": plan_to_components(plan),
     }
     if plan.confidence is not None:
         runbook["confidence"] = plan.confidence

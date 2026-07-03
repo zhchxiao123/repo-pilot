@@ -22,8 +22,7 @@ from langgraph.graph import END, START, StateGraph
 
 from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
-from repo_pilot.compose import compile_components, compile_compose, iter_step_commands
-from repo_pilot.component_oracles import verify_component
+from repo_pilot.compose import compile_compose, iter_step_commands
 from repo_pilot.discovery import discover_targets
 from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
@@ -33,6 +32,8 @@ from repo_pilot.explore_tools import RepoTools, seed_context
 from repo_pilot.plan_agent import _AGENT_EVIDENCE_ID, explore_and_plan
 from repo_pilot.model_client import ModelClient
 from repo_pilot.planner import plan
+from repo_pilot.run_verifier import verify_run_plan
+from repo_pilot.runbook_projection import runbook_to_plan
 from repo_pilot.repair import patch_fingerprint, propose_repair
 from repo_pilot.report import render_report
 from repo_pilot.security import default_security, dummy_env, redact
@@ -206,46 +207,31 @@ def build_graph(
 
     def _verify_components(state: State) -> dict:
         # Component Run Plan (#38): the system "runs" when every component reaches
-        # its oracle. Compose already gates start order (depends_on: service_healthy
-        # for native-cmd components); the remaining oracles are adjudicated post-up
-        # against the live sandbox (ADR-0004). The sandbox stays up on success.
+        # its oracle. Verification is delegated to the one verifier interface
+        # (run_verifier), which owns single-app vs component adjudication; this
+        # node only projects the resulting facts back onto the persisted runbook.
         runbook = dict(state["runbook"])
-        components = runbook["components"]
-        sandbox = executor.start(
-            compile_components(components), repo_dir=str(state["repo_ref"].repo_dir)
+        plan = runbook_to_plan(runbook)
+        result = verify_run_plan(
+            plan,
+            executor,
+            repo_dir=str(state["repo_ref"].repo_dir),
+            retries=healthcheck_retries,
+            poll_interval=poll_interval,
+            sleep=sleep,
         )
-        results = []
-        for comp in components:
-            res = verify_component(
-                comp,
-                sandbox,
-                retries=healthcheck_retries,
-                poll_interval=poll_interval,
-                sleep=sleep,
-            )
-            results.append(
-                {
-                    "name": comp["name"],
-                    "oracle": comp["oracle"]["type"],
-                    "passed": res.passed,
-                    "detail": res.detail,
-                }
-            )
-        verified = all(r["passed"] for r in results)
-        logs = redact(sandbox.logs)  # scrub secrets before anything is stored (§20.2)
-        ports = [
-            {"container": c, "host": h}
-            for comp in components
-            for c, h in sandbox.service_ports(comp["name"]).items()
-        ]
-        attempt = {"healthcheck_passed": verified, "logs_summary": logs}
+        logs = result.logs_summary
+        attempt = {"healthcheck_passed": result.verified, "logs_summary": logs}
         verification = {
-            "healthcheck_result": {"passed": verified},
+            "healthcheck_result": {"passed": result.verified},
             "logs_summary": logs,
-            "ports": ports,
-            "components": results,
+            "ports": result.ports,
+            "components": [
+                {"name": r.name, "oracle": r.oracle, "passed": r.passed, "detail": r.detail}
+                for r in result.component_results
+            ],
         }
-        if verified:
+        if result.verified:
             runbook["status"] = "verified"
             verification["reproduce"] = _reproduce(state["repo_url"], runbook)
             runbook["verification"] = verification
@@ -253,10 +239,9 @@ def build_graph(
                 "runbook": runbook,
                 "verified": True,
                 "attempts": [attempt],
-                "sandbox": sandbox,
+                "sandbox": result.sandbox,
                 "visited": ["verify"],
             }
-        sandbox.stop()
         runbook["status"] = "failed"
         runbook["verification"] = verification
         return {
