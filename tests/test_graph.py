@@ -325,3 +325,21 @@ def test_macro_phases_are_the_documented_dag():
         "test",
         "report",
     ]
+
+
+def test_graph_state_carries_canonical_plan_and_outcome(tmp_path, git_repo_from, fixture_repo):
+    # ADR-0019: the RunPlan / verification / outcome are the state spine; the v1
+    # runbook is projected only at the report edge.
+    from repo_pilot.run_shape import RunPlan
+    from repo_pilot.run_verifier import RunVerification
+    from repo_pilot.outcome import Outcome, OutcomeKind
+
+    origin, _commit = git_repo_from(fixture_repo("express-min"))
+    final = _run(_success_executor(), tmp_path, origin)
+
+    assert isinstance(final["plan"], RunPlan)
+    assert isinstance(final["verification"], RunVerification)
+    assert isinstance(final["outcome"], Outcome)
+    assert final["outcome"].kind == OutcomeKind.VERIFIED
+    # the v1 runbook still exists as the persisted projection
+    assert final["runbook"]["status"] == "verified"
