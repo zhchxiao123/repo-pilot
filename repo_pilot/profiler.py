@@ -92,7 +92,9 @@ def profile(
                     )
                 ]
 
-        for key in ("dev", "start"):
+        # start/dev mark a service; test/build mark library/build shapes when no
+        # service start is present (shape_detection decides — profiler only records).
+        for key in ("dev", "start", "test", "build"):
             command = data.get("scripts", {}).get(key)
             if command:
                 ref = ev.add(
@@ -111,6 +113,33 @@ def profile(
                         "evidence_refs": [ref],
                     }
                 )
+
+        # `bin` marks an installable CLI. It may be a string (single bin named after
+        # the package) or an object of {name: path}.
+        bin_field = data.get("bin")
+        bin_names: list[str] = []
+        if isinstance(bin_field, str):
+            name = data.get("name", "cli")
+            bin_names = [name]
+        elif isinstance(bin_field, dict):
+            bin_names = list(bin_field.keys())
+        for name in bin_names:
+            ref = ev.add(
+                file="package.json",
+                kind="package_script",
+                excerpt=f'"bin": {json.dumps(bin_field)}'[:200],
+                reason=f"package declares CLI bin {name!r}",
+                confidence=0.8,
+            )
+            entrypoints.append(
+                {
+                    "type": "bin",
+                    "file": "package.json",
+                    "key": name,
+                    "command": name,
+                    "evidence_refs": [ref],
+                }
+            )
 
     prof = {
         "languages": languages,
