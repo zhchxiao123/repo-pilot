@@ -73,3 +73,18 @@ def test_needs_compose_is_deferred():
 
 def test_empty_state_is_no_candidate():
     assert outcome_from_state({}).kind == OutcomeKind.NO_CANDIDATE
+
+
+def test_unknown_classification_does_not_mask_runbook_shape():
+    # an agent BUILD plan (classification clamped/unknown) must still report as
+    # the runbook-inferred shape, not verified:unknown
+    from repo_pilot.run_shape import Oracle, RunComponent, RunPlan, RunShape
+    from repo_pilot.runbook_projection import plan_to_runbook
+
+    plan = RunPlan(id="b", shape=RunShape.BUILD, repo={"url": "u", "commit": "c"},
+                   components=[RunComponent(name="build", image="buildpack-deps:bookworm",
+                              command="make build", oracle=Oracle(type="build-succeeds"))])
+    state = {"verified": True, "classification": "unknown", "runbook": plan_to_runbook(plan)}
+    out = outcome_from_state(state)
+    assert out.shape == "build"
+    assert out.verdict() == "verified:build"

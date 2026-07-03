@@ -86,8 +86,12 @@ class EvalReport:
 
 def verdict_of(final: dict) -> str:
     """Reduce a graph final state to a canonical compound verdict token
-    (``verified:cli``, ``not_runnable:docs``, ``failed``, ...), via the shared
-    Outcome taxonomy so eval and the graph agree on what a terminal state means."""
+    (``verified:cli``, ``not_runnable:docs``, ``failed``, ...). Prefer the
+    canonical Outcome the graph derived from the RunPlan's shape; fall back to the
+    state adapter for legacy states that don't carry one."""
+    outcome = final.get("outcome")
+    if outcome is not None:
+        return outcome.verdict()
     return outcome_from_state(final).verdict()
 
 

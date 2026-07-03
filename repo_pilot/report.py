@@ -107,12 +107,14 @@ def render_report(
     if outcome.verified:
         multi_component = len(plan.plan.components) > 1
         if multi_component and compose_artifact:
-            # The generated stack is persisted beside this report; bring it up from
-            # there (dependency components have no command of their own).
+            # From this run's artifacts directory (where the compose file lives):
+            # clone the repo into ./repo — the compose's relative build context —
+            # then build + up. Repo-code components are baked from ./repo; managed
+            # dependency images are pulled.
             reproduce = [
+                f"# run these from this run's artifacts directory (next to {compose_artifact}):",
                 f"git clone {repo_url} repo",
-                f"# the generated component stack is saved as {compose_artifact} in this run's artifacts",
-                f"docker compose -f {compose_artifact} up",
+                f"docker compose -f {compose_artifact} up --build",
             ]
         else:
             reproduce = ["git clone " + repo_url + " repo", "cd repo", *plan.reproduce_commands()]
