@@ -11,7 +11,7 @@ from repo_pilot.run_shape import (
     RunShape,
     normalize_plan,
 )
-from repo_pilot.runbook_projection import plan_to_runbook, runbook_to_plan
+from repo_pilot.runbook_projection import plan_to_components, plan_to_runbook, runbook_to_plan
 from repo_pilot.schemas import validate_runbook
 
 REPO = {"url": "https://x/y", "commit": "abc"}
@@ -115,6 +115,35 @@ def test_multi_component_plan_round_trips_to_multi_component():
     )
     rb = plan_to_runbook(plan, status="candidate")
     assert runbook_to_plan(rb).shape == RunShape.MULTI_COMPONENT_SERVICE
+
+
+def test_generated_env_reaches_repo_code_components(tmp_path):
+    # The graph injects dummy .env.example values as top-level runbook.env.generated;
+    # importing back to a plan must land them on repo-code components so compile
+    # actually passes them to the container (regression guard).
+    from repo_pilot.compose import compile_components
+
+    plan = RunPlan(
+        id="s", shape=RunShape.MULTI_COMPONENT_SERVICE, repo=REPO,
+        components=[
+            RunComponent(name="db", image="postgres:16", role="db",
+                         oracle=Oracle(type="native-cmd", command="pg_isready")),
+            RunComponent(name="app", image="node:20", command="npm start", ports=[3000],
+                         oracle=Oracle(type="http", port=3000, path="/health")),
+        ],
+    )
+    rb = plan_to_runbook(plan, status="candidate")
+    rb["env"] = {"generated": {"DATABASE_URL": "dummy", "LOG_LEVEL": "dummy"}}
+
+    imported = runbook_to_plan(rb)
+    app = next(c for c in imported.components if c.command)
+    db = next(c for c in imported.components if not c.command)
+    assert app.env["DATABASE_URL"] == "dummy" and app.env["LOG_LEVEL"] == "dummy"
+    assert "DATABASE_URL" not in db.env  # managed image keeps its own env
+
+    # and it survives compilation into the app service's environment
+    compose = compile_components(plan_to_components(imported))
+    assert compose["services"]["app"]["environment"]["DATABASE_URL"] == "dummy"
 
 
 def test_projected_service_plan_is_normalizable():

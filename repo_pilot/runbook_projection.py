@@ -221,6 +221,18 @@ def runbook_to_plan(runbook: dict) -> RunPlan:
         components = [_dict_to_component(c) for c in raw_components]
     else:
         components = [_component_from_legacy(runbook)]
+
+    # Runtime env (dummy `.env.example` values injected by the graph) lives at the
+    # top level of the v1 runbook; map it onto the repo-code components so it
+    # actually reaches the container when compiled to compose. Managed dependency
+    # images (no command, e.g. postgres) keep their own env untouched.
+    generated = (runbook.get("env") or {}).get("generated") or {}
+    if generated:
+        for comp in components:
+            if comp.command:
+                for key, value in generated.items():
+                    comp.env.setdefault(key, value)
+
     return RunPlan(
         id=runbook.get("id", ""),
         shape=_infer_shape(components),
