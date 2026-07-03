@@ -102,3 +102,25 @@ def test_compile_components_hardens_app_components_but_not_image_deps():
     # db is a trusted managed image (no repo command) -> resource limits only
     assert "cap_drop" not in compose["services"]["db"]
     assert "mem_limit" in compose["services"]["db"]
+
+
+def test_reproduce_compose_bakes_repo_code_components_portably():
+    from repo_pilot.compose import reproduce_compose
+
+    components = [
+        {"name": "db", "image": "postgres:16",
+         "oracle": {"type": "native-cmd", "command": "pg_isready"}},
+        {"name": "backend", "image": "python:3.11", "workdir": "/workspace/repo",
+         "command": "uvicorn app:app", "ports": [8000], "depends_on": ["db"],
+         "oracle": {"type": "http", "port": 8000, "path": "/health"}},
+    ]
+    compose = reproduce_compose(components, repo_context="./repo")
+    backend = compose["services"]["backend"]
+    # repo-code component builds from the cloned repo (portable, no absolute paths)
+    assert backend["build"]["context"] == "./repo"
+    assert "COPY . /workspace/repo" in backend["build"]["dockerfile_inline"]
+    assert "FROM python:3.11" in backend["build"]["dockerfile_inline"]
+    assert "image" not in backend  # baked, not pulled
+    # managed dependency image is untouched (still pulled by image)
+    assert compose["services"]["db"]["image"] == "postgres:16"
+    assert "build" not in compose["services"]["db"]

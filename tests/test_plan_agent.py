@@ -234,3 +234,13 @@ def test_agent_exercises_a_cli_as_a_component(tmp_path):
     assert plan.shape == RunShape.CLI
     assert plan.components[0].oracle.type == "functional-smoke"
     assert "mytool convert" in plan.components[0].command
+
+
+def test_agent_can_classify_build_and_batch(tmp_path):
+    # build/batch are valid classifications now (not downgraded to unknown)
+    for shape in ("build", "batch"):
+        model = FakeChatModel([
+            [_tc("submit_plan", {"classification": shape, "candidates": []}, "t1")],
+        ])
+        result = explore_and_plan(model, RepoTools(tmp_path), seed="s", repo=REPO)
+        assert result.classification == shape

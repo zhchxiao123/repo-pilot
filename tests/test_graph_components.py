@@ -92,9 +92,14 @@ def test_verified_multicomponent_persists_compose_and_reproduces_it(
 
     compose_file = tmp_path / "compose.generated.yaml"
     assert compose_file.is_file()  # the generated stack is persisted as an artifact
+    persisted = yaml.safe_load(compose_file.read_text())
+    # the persisted compose actually bakes the repo (portable relative context),
+    # so `docker compose up --build` runs the app — not a repo-less stack
+    backend = persisted["services"]["backend"]
+    assert backend["build"]["context"] == "./repo"
+    assert "COPY ." in backend["build"]["dockerfile_inline"]
     report = (tmp_path / "report.md").read_text()
-    # reproduce references the persisted compose, not a bare `docker compose up`
-    assert "compose.generated.yaml" in report
+    assert "compose.generated.yaml" in report and "up --build" in report
 
 
 def test_component_system_fails_when_one_oracle_fails(

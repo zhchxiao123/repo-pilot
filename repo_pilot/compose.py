@@ -137,6 +137,35 @@ def render_compose(compose: dict) -> str:
     return yaml.safe_dump(compose, default_flow_style=False, sort_keys=True)
 
 
+def reproduce_compose(components: list[dict], repo_context: str = "./repo") -> dict:
+    """A portable compose for *reproduction* (not the executor's runtime compose).
+
+    Each repo-code component (has a ``command``) is baked from the cloned repo via
+    a relative build context + an inline Dockerfile, so a user can:
+
+        git clone <url> repo        # into <repo_context>, beside this compose file
+        docker compose -f compose.generated.yaml up --build
+
+    and actually run the app. Managed dependency images (db/cache, no command) keep
+    their ``image`` and are pulled. This differs from the runtime compose the
+    executor builds (which streams an absolute build context to the daemon) — here
+    the context is relative so the recipe is portable.
+    """
+    compose = compile_components(components)
+    for comp in components:
+        if "command" not in comp:
+            continue  # managed dependency image — pulled, not built
+        service = compose["services"][comp["name"]]
+        image = service.get("image", "debian:stable-slim")
+        workdir = comp.get("workdir", "/workspace/repo")
+        service.pop("image", None)
+        service["build"] = {
+            "context": repo_context,
+            "dockerfile_inline": f"FROM {image}\nWORKDIR {workdir}\nCOPY . {workdir}\n",
+        }
+    return compose
+
+
 def with_repo_build(compose: dict, context_dir: str, dockerfile: str) -> dict:
     """Return a copy of ``compose`` where the app is built (code copied in) rather
     than bind-mounted.

@@ -93,10 +93,11 @@ def outcome_from_verification(
 
 
 def _shape_of_state(state: dict) -> str:
-    """Best-effort shape for a legacy graph state: the agent classification, else
-    the shape inferred from the runbook, else a plain service default."""
+    """Best-effort shape for a legacy graph state. The shape inferred from the
+    runbook/plan wins over a vague ``unknown`` classification, so a real
+    RunShape.BUILD/BATCH plan is never reported/scored as ``verified:unknown``."""
     classification = state.get("classification")
-    if classification:
+    if classification and classification != "unknown":
         return str(classification)
     runbook = state.get("runbook")
     if runbook:
@@ -104,7 +105,7 @@ def _shape_of_state(state: dict) -> str:
         from repo_pilot.runbook_projection import runbook_to_plan
 
         return runbook_to_plan(runbook).shape.value
-    return "service"
+    return str(classification) if classification else "service"
 
 
 def outcome_from_state(state: dict) -> Outcome:

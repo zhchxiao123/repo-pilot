@@ -22,7 +22,7 @@ from langgraph.graph import END, START, StateGraph
 
 from repo_pilot import profiler
 from repo_pilot.cloner import RepoCloner, RepoRef
-from repo_pilot.compose import iter_step_commands
+from repo_pilot.compose import iter_step_commands, render_compose, reproduce_compose
 from repo_pilot.discovery import discover_targets
 from repo_pilot.evidence import EvidenceBuilder, write_evidence
 from repo_pilot.executor import SandboxExecutor
@@ -33,7 +33,7 @@ from repo_pilot.model_client import ModelClient
 from repo_pilot.candidate_planning import plan_candidates
 from repo_pilot.run_shape import normalize_plan
 from repo_pilot.run_verifier import verify_run_plan
-from repo_pilot.runbook_projection import plan_to_runbook
+from repo_pilot.runbook_projection import plan_to_components, plan_to_runbook
 from repo_pilot.outcome import outcome_from_verification
 from repo_pilot.repair import patch_fingerprint, propose_repair
 from repo_pilot.report import render_report
@@ -367,12 +367,14 @@ def build_graph(
             Path(state["runbook_path"]).write_text(
                 yaml.safe_dump(runbook, sort_keys=True)
             )
-        # Persist the generated compose so the reproduce steps point at a real file.
-        verification = state.get("verification")
+        # Persist a *portable* reproduce compose (repo baked from a relative
+        # ./repo context) so `docker compose up --build` actually runs the app —
+        # not the executor's runtime compose, whose build context is machine-local.
+        plan = state.get("plan")
         compose_artifact = None
-        if state.get("verified") and verification is not None and verification.compose:
+        if state.get("verified") and plan is not None:
             compose_path = Path(state["compose_path"])
-            compose_path.write_text(yaml.safe_dump(verification.compose, sort_keys=True))
+            compose_path.write_text(render_compose(reproduce_compose(plan_to_components(plan))))
             compose_artifact = compose_path.name
         markdown = render_report(
             state["repo_url"],

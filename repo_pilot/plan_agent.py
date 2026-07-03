@@ -29,7 +29,7 @@ from repo_pilot.run_shape import (
 _AGENT_EVIDENCE_ID = "ev_agent1"
 _MAX_ITERS = 25
 
-CLASSIFICATIONS = ("service", "cli", "library", "docs", "monorepo", "unknown")
+CLASSIFICATIONS = ("service", "cli", "library", "build", "batch", "docs", "monorepo", "unknown")
 
 _SYSTEM = """You determine how to run a GitHub repository locally in one container.
 
