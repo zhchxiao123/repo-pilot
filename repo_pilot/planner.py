@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from repo_pilot.confidence import confidence
+from repo_pilot.run_shape import RunShape
+from repo_pilot.shape_detection import detect_shapes
 
 _DEFAULT_PORT = 3000
 _FRAMEWORK_PORTS = {"vite": 5173, "nextjs": 3000, "express": 3000}
@@ -60,8 +62,17 @@ def _expected_port(frameworks: list[str]) -> int:
 
 
 def plan(profile: dict, evidence: list[dict]) -> PlanResult:
+    # Deterministic shape detection decides *what kind* of repo this is; this
+    # rules-first planner only knows how to build Node *service* runbooks, so it
+    # generates candidates when the shape is a service and defers otherwise (the
+    # canonical multi-shape planner handles cli/library/build — Task 6).
+    hints = detect_shapes(profile, evidence)
     entrypoints = profile.get("entrypoints", [])
-    if not entrypoints:
+    service_entries = [
+        e for e in entrypoints
+        if e.get("type") == "script" and e.get("key") in ("start", "dev")
+    ]
+    if not service_entries or hints.primary.shape != RunShape.SERVICE:
         if any(e.get("kind") == "compose_service" for e in evidence):
             return PlanResult(deferred_reason=NEEDS_COMPOSE)
         return PlanResult()
@@ -74,7 +85,7 @@ def plan(profile: dict, evidence: list[dict]) -> PlanResult:
     port = _expected_port(frameworks)
 
     candidates: list[dict] = []
-    for entry in entrypoints:
+    for entry in service_entries:
         key = entry["key"]
         command = _start_command(manager, key)
         refs = list(entry.get("evidence_refs", []))

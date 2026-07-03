@@ -90,11 +90,22 @@ Each run creates `artifacts/<job-id>/` containing:
 
 - **`report.md`** — the human-readable report:
   - Repository (URL, commit, default branch)
-  - Runtime: chosen candidate + confidence, verified/failed status, healthcheck
-    result, and **reproduce** commands
-  - Test targets discovered
-  - Smoke test results (with per-failure request + `curl` reproduce)
+  - **Outcome**: the shape-specific verdict (`verified` / `failed` /
+    `not_runnable` / ...), the detected **shape** (service, cli, library, build,
+    batch, multi-component, docs), and — when verified — what it was **exercised
+    by** (the oracle that adjudicated success)
+  - **Run Plan**: the components that ran (image, command, oracle)
+  - **Reproduce** commands, at shape-appropriate granularity (a single-component
+    shape reproduces via its command; a multi-component system via `docker
+    compose up`)
+  - Test targets discovered; smoke test results (with per-failure request +
+    `curl` reproduce)
   - On failure: captured (redacted) logs
+
+  repo-pilot does not only verify web services. A **cli** is verified by running a
+  real command to a clean exit, a **library** by running its test suite, a
+  **build** by building successfully — non-web repos succeed by being *exercised*,
+  not by starting a server.
 - **`runbook.yaml`** — the **Verified Runbook** (`schemas/runbook.schema.json`): the
   reusable, proven description of how to run the project, including the executed
   `verification` block (ports, healthcheck, logs, reproduce).

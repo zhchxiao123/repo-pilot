@@ -10,6 +10,16 @@ from evidence (CI, README, Dockerfile, package manifests), plan candidate ways t
 run it, and **verify by actually executing in an isolated container** — the sandbox,
 not the model, decides what's true.
 
+repo-pilot verifies the **runnable shape** of a repo, not just web services
+(ADR-0019). Success is shape-specific:
+
+- **service** — an Express app comes up and answers its HTTP oracle.
+- **cli** — a command runs to a clean exit (functional-smoke).
+- **library** — the test suite passes (tests-pass).
+- **build** — the build succeeds (build-succeeds).
+- **multi-component** — every component (db + backend + …) reaches its oracle.
+- **docs** — honestly reported as not runnable.
+
 ```
 GitHub repo ─▶ Profile ─▶ Runbook candidates ─▶ Sandbox verify ─▶ Verified Runbook
                                                                         │

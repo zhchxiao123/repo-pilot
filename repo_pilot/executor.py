@@ -113,7 +113,12 @@ class _FakeSandbox:
         return self.responses.get(path), self.bodies.get(path)
 
     def service_ports(self, name: str) -> dict[int, int]:
-        return dict(self._component_ports.get(name, {}))
+        published = self._component_ports.get(name)
+        if published is None and name == "app":
+            # single-app back-compat: the lone "app" component publishes .ports
+            # (mirrors the real executor's component_ports.get("app") fallback).
+            return dict(self.ports)
+        return dict(published or {})
 
     def service_state(self, name: str) -> tuple[str, str | None, int | None]:
         return self._states.get(name, ("running", None, None))

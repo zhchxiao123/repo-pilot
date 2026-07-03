@@ -3,13 +3,17 @@
 Measures how often repo-pilot produces a *correct* verdict across a set of repos —
 the metric behind the ≥90% goal (given 1000 repos, correctly output the startup
 method for 900). "Correct" = the pipeline's verdict matches the case's expected
-verdict, where a verdict is one of:
+verdict, where a verdict is the canonical compound ``kind:shape`` token (or a bare
+kind when shape does not apply):
 
-- ``verified``       — the run flow was sandbox-verified (a service came up, or a
-                       non-service was exercised to a clean result)
-- ``not-a-service``  — correctly judged not a runnable system (docs-only, ...)
-- ``failed``         — a candidate was tried but did not verify
-- ``deferred`` / ``no-candidate`` — nothing was run
+- ``verified:<shape>``     — sandbox-verified (a service came up, or a non-service
+                             like cli/library/build was exercised to a clean result)
+- ``not_runnable:<shape>`` — correctly judged not a runnable system (docs-only, ...)
+- ``failed``               — a candidate was tried but did not verify
+- ``deferred`` / ``no_candidate`` — nothing was run
+
+Matching is hierarchical (``matches``): a coarse expected ``verified`` subsumes
+``verified:cli``, and legacy tokens (``not-a-service``, ``no-candidate``) alias in.
 
 The scoring/clustering core is pure and unit-tested; the runner drives the real
 graph (Docker + LLM) and is used operationally. Failures are clustered by
@@ -24,11 +28,30 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+from repo_pilot.outcome import outcome_from_state
+
+# Legacy verdict tokens -> canonical ones, so pre-existing manifests keep scoring
+# without edits (kept for one release, then dropped).
+_ALIASES = {"not-a-service": "not_runnable", "no-candidate": "no_candidate"}
+
+
+def matches(expected: str, actual: str) -> bool:
+    """Hierarchical verdict match. A coarse expectation subsumes any finer actual:
+    ``verified`` matches ``verified:cli``; ``not_runnable`` matches
+    ``not_runnable:docs``. Legacy tokens are aliased in first."""
+    expected = _ALIASES.get(expected, expected)
+    if expected == actual:
+        return True
+    return actual.startswith(expected + ":")
+
+
 @dataclass(frozen=True)
 class EvalCase:
     name: str
     repo_url: str
-    expected: str  # verified | not-a-service | failed | deferred | no-candidate
+    # compound kind:shape (verified:cli, not_runnable:docs) or a bare kind
+    # (failed | deferred | no_candidate | error); legacy tokens alias in.
+    expected: str
     commit: str | None = None
 
 
@@ -41,7 +64,7 @@ class EvalResult:
 
     @property
     def correct(self) -> bool:
-        return self.actual == self.expected
+        return matches(self.expected, self.actual)
 
 
 @dataclass(frozen=True)
@@ -62,17 +85,10 @@ class EvalReport:
 
 
 def verdict_of(final: dict) -> str:
-    """Reduce a graph final state to a single verdict category."""
-    if final.get("verified"):
-        return "verified"
-    reason = final.get("deferred_reason")
-    if isinstance(reason, str) and reason.startswith("not-a-service"):
-        return "not-a-service"
-    if final.get("runbook") is not None:
-        return "failed"
-    if reason:
-        return "deferred"
-    return "no-candidate"
+    """Reduce a graph final state to a canonical compound verdict token
+    (``verified:cli``, ``not_runnable:docs``, ``failed``, ...), via the shared
+    Outcome taxonomy so eval and the graph agree on what a terminal state means."""
+    return outcome_from_state(final).verdict()
 
 
 def _hint(final: dict) -> str:
@@ -100,6 +116,26 @@ def evaluate(cases: list[EvalCase], run_fn: Callable[[EvalCase], dict]) -> EvalR
     return EvalReport(results)
 
 
+def _expected_shape(expected: str) -> str | None:
+    """The shape a compound expected verdict targets (``verified:cli`` -> ``cli``),
+    or None for bare verdicts (failed/deferred/no_candidate/error)."""
+    expected = _ALIASES.get(expected, expected)
+    return expected.split(":", 1)[1] if ":" in expected else None
+
+
+def coverage_by_shape(report: EvalReport) -> dict[str, tuple[int, int]]:
+    """Per-shape (correct, total), so verified:cli is measured separately from
+    verified:service. Cases whose expected verdict has no shape are omitted."""
+    buckets: dict[str, tuple[int, int]] = {}
+    for r in report.results:
+        shape = _expected_shape(r.expected)
+        if shape is None:
+            continue
+        correct, total = buckets.get(shape, (0, 0))
+        buckets[shape] = (correct + (1 if r.correct else 0), total + 1)
+    return dict(sorted(buckets.items()))
+
+
 def cluster_failures(report: EvalReport) -> dict[str, list[str]]:
     """Group incorrect cases by an ``expected->actual`` signature, so the dominant
     failure modes are visible at a glance."""
@@ -115,11 +151,12 @@ def format_report(report: EvalReport) -> str:
     lines = [
         "# repo-pilot coverage eval",
         "",
-        f"- Coverage: {report.coverage:.1%} ({report.correct}/{report.total})",
-        "",
-        "## Cases",
-        "",
+        f"- Overall coverage: {report.coverage:.1%} ({report.correct}/{report.total})",
     ]
+    for shape, (correct, total) in coverage_by_shape(report).items():
+        pct = correct / total if total else 0.0
+        lines.append(f"- {shape.capitalize()} coverage: {pct:.1%} ({correct}/{total})")
+    lines += ["", "## Cases", ""]
     for r in report.results:
         mark = "OK " if r.correct else "XX "
         suffix = f" — {r.detail}" if (r.detail and not r.correct) else ""

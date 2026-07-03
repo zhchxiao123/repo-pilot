@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-pilot/schemas/run-plan.schema.json",
+  "title": "RunPlan",
+  "description": "The canonical v2 run-plan: a repo's runnable shape as shape + components + oracle + outcome. Unlike v1 Runbook it has no legacy runtime/steps/healthcheck block; single-service HTTP is just one shape. v1 remains the persisted compatibility artifact during transition (ADR-0019).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "shape", "status", "repo", "components"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "v2" },
+    "id": { "type": "string" },
+    "shape": {
+      "type": "string",
+      "enum": [
+        "service",
+        "multi_component_service",
+        "cli",
+        "library",
+        "batch",
+        "build",
+        "docs",
+        "unknown"
+      ],
+      "description": "The runnable shape this plan expresses."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["candidate", "verified", "failed"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "rationale": { "type": "string" },
+    "source": { "type": "string", "description": "deterministic | agent" },
+    "repo": {
+      "type": "object",
+      "required": ["url", "commit"],
+      "properties": {
+        "url": { "type": "string" },
+        "commit": { "type": "string" }
+      }
+    },
+    "components": {
+      "type": "array",
+      "description": "First-class components; a single-service plan is the one-component case.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "image", "oracle"],
+        "properties": {
+          "name": { "type": "string" },
+          "role": { "type": "string" },
+          "image": { "type": "string" },
+          "workdir": { "type": "string" },
+          "command": {
+            "type": "string",
+            "description": "Foreground command; presence marks a repo-code (untrusted) component."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "ports": { "type": "array", "items": { "type": "integer" } },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "oracle": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "http",
+                  "tcp-port",
+                  "native-cmd",
+                  "log-ready",
+                  "process-up",
+                  "stdio-handshake",
+                  "exit-zero",
+                  "functional-smoke",
+                  "build-succeeds",
+                  "tests-pass"
+                ]
+              },
+              "port": { "type": "integer" },
+              "path": { "type": "string" },
+              "command": { "type": "string" },
+              "pattern": { "type": "string" },
+              "acceptable_status": {
+                "type": "array",
+                "items": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "description": "Terminal outcome (Task 4). Present once adjudicated.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["verified", "failed", "deferred", "not_runnable", "no_candidate", "error"]
+        },
+        "shape": { "type": "string" },
+        "summary": { "type": "string" },
+        "detail": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "runnable": { "type": "boolean" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "description": "Facts from the sandbox run (ports, per-component oracle results, logs)."
+    }
+  }
+}

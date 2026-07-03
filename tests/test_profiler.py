@@ -44,3 +44,31 @@ def test_scalar_conclusions_carry_resolving_evidence_refs(fixture_repo):
     assert "framework:express" in refs
     for conclusion_refs in refs.values():
         assert conclusion_refs and set(conclusion_refs) <= ids
+
+
+def test_python_lib_profiles_as_library(fixture_repo):
+    prof, evidence = profile(fixture_repo("lib-min"))
+    assert "python" in prof["languages"] and "pip" in prof["package_managers"]
+    # a test suite, no CLI/service -> an inferred test entrypoint
+    assert any(e["key"] == "test" for e in prof["entrypoints"])
+    assert not any(e["type"] == "binary" for e in prof["entrypoints"])
+
+
+def test_flask_requirements_profiles_as_service(fixture_repo):
+    prof, _ = profile(fixture_repo("flask-min"))
+    assert "python" in prof["languages"]
+    assert "flask" in prof["frameworks"]
+    assert any(e["key"] == "start" for e in prof["entrypoints"])
+
+
+def test_go_module_profiles_as_cli(fixture_repo):
+    prof, _ = profile(fixture_repo("go-cli"))
+    assert "go" in prof["languages"]
+    # no net/http -> a CLI binary entrypoint, not a service
+    assert any(e["type"] == "binary" for e in prof["entrypoints"])
+    assert not any(e["key"] == "start" for e in prof["entrypoints"])
+
+
+def test_makefile_build_target_is_captured(fixture_repo):
+    prof, _ = profile(fixture_repo("make-build"))
+    assert any(e["key"] == "build" for e in prof["entrypoints"])
