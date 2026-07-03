@@ -281,7 +281,8 @@ def test_plan_agent_covers_a_stack_rules_miss(tmp_path, git_repo_from, fixture_r
     rb = final["runbook"]
     assert rb["id"].startswith("agent_")
     assert rb["runtime"]["image"] == "python:3.11-bookworm"
-    assert rb["steps"]["start"][0]["command"] == "python app.py"
+    # setup is folded into the component command
+    assert rb["steps"]["start"][0]["command"] == "pip install -r requirements.txt && python app.py"
     assert final["classification"] == "service"
     assert model.invocations >= 1
     assert final["verified"] is True  # subordination: sandbox still adjudicates

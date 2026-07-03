@@ -199,7 +199,7 @@ def build_graph(
             evidence = [*state["evidence"], ev]
             write_evidence(state["evidence_path"], evidence)
             return {
-                "runbook": _enrich(agent.candidates[0], state),
+                "runbook": _enrich(plan_to_runbook(agent.candidates[0]), state),
                 "candidates": agent.candidates,
                 "classification": agent.classification,
                 "evidence": evidence,

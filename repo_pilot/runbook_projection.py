@@ -20,11 +20,11 @@ Two invariants make projection safe:
 from __future__ import annotations
 
 from repo_pilot.run_shape import (
-    ORACLE_PRIMARY_SHAPE,
     Oracle,
     RunComponent,
     RunPlan,
     RunShape,
+    infer_shape,
     normalize_plan,
 )
 
@@ -38,14 +38,6 @@ _SHAPE_ROLE = {
     RunShape.BATCH: "batch",
     RunShape.BUILD: "build",
 }
-_ROLE_SHAPE = {
-    "cli": RunShape.CLI,
-    "library": RunShape.LIBRARY,
-    "batch": RunShape.BATCH,
-    "build": RunShape.BUILD,
-    "service": RunShape.SERVICE,
-}
-
 _DEFAULT_IMAGE = "python:3.11"
 _DEFAULT_WORKDIR = "/workspace/repo"
 
@@ -168,24 +160,8 @@ def _dict_to_component(d: dict) -> RunComponent:
 
 
 def _infer_shape(components: list[RunComponent]) -> RunShape:
-    """Recover a shape from imported components.
-
-    Order (see module docstring): component ``role`` first, then an *unambiguous*
-    oracle via ``ORACLE_PRIMARY_SHAPE``, then structural (>1 component ->
-    multi-component service), else plain service. Ambiguous oracles
-    (``exit-zero``, ``http``) never decide shape on their own.
-    """
-    for comp in components:
-        if comp.role in _ROLE_SHAPE:
-            return _ROLE_SHAPE[comp.role]
-    for comp in components:
-        if comp.oracle is not None:
-            shape = ORACLE_PRIMARY_SHAPE.get(comp.oracle.type)
-            if shape is not None:
-                return shape
-    if len(components) > 1:
-        return RunShape.MULTI_COMPONENT_SERVICE
-    return RunShape.SERVICE
+    """Recover a shape from imported components (see ``run_shape.infer_shape``)."""
+    return infer_shape(components)
 
 
 def _component_from_legacy(runbook: dict) -> RunComponent:
