@@ -53,7 +53,7 @@ def _stub_plan(monkeypatch):
     import copy
     monkeypatch.setattr(
         graph_module, "plan_candidates",
-        lambda profile, evidence: PlanningResult(
+        lambda profile, evidence, **kwargs: PlanningResult(
             candidates=[runbook_to_plan(copy.deepcopy(COMPONENT_RUNBOOK))],
             classification="service",
         ),
@@ -119,6 +119,38 @@ def test_component_system_fails_when_one_oracle_fails(
     assert results["backend"]["passed"] is False
 
 
+# --- compose-first repos go through the controlled import (plan Task 2.3) ----
+
+
+def test_compose_first_fixture_imports_and_verifies(tmp_path, git_repo_from, fixture_repo):
+    # real profile -> plan path (no stub): the fixture's own docker-compose.yml is
+    # imported as a canonical plan and verified through the standard machinery
+    origin, _ = git_repo_from(fixture_repo("compose-first"))
+    executor = FakeSandboxExecutor(
+        component_ports={"web": {8000: 49152}},
+        states={"db": ("running", "healthy", None), "web": ("running", None, None)},
+        responses={"/health": 200},
+    )
+    final = _run(executor, tmp_path, origin)
+
+    assert final["verified"] is True
+    assert final["classification"] == "multi_component_service"
+    results = {c["name"]: c for c in final["runbook"]["verification"]["components"]}
+    assert results["db"]["passed"] and results["db"]["oracle"] == "native-cmd"
+    assert results["web"]["passed"] and results["web"]["oracle"] == "http"
+
+
+def test_unsafe_compose_fixture_defers_and_report_says_why(
+    tmp_path, git_repo_from, fixture_repo
+):
+    origin, _ = git_repo_from(fixture_repo("compose-unsafe"))
+    final = _run(FakeSandboxExecutor(), tmp_path, origin)
+
+    assert final.get("verified") is False
+    assert final["deferred_reason"] == "unsafe-compose"
+    assert "unsafe-compose" in (tmp_path / "report.md").read_text()
+
+
 CLI_RUNBOOK = {
     "schema_version": "v1", "id": "cli", "status": "candidate",
     "repo": {"url": "https://github.com/org/repo", "commit": "abc123"},
@@ -139,7 +171,7 @@ def test_non_service_cli_verifies_by_running_to_a_clean_exit(
     import copy
     monkeypatch.setattr(
         graph_module, "plan_candidates",
-        lambda p, e: PlanningResult(
+        lambda p, e, **kwargs: PlanningResult(
             candidates=[runbook_to_plan(copy.deepcopy(CLI_RUNBOOK))], classification="cli"
         ),
     )

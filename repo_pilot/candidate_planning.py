@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from repo_pilot.compose_import import import_compose
 from repo_pilot.confidence import confidence
 from repo_pilot.planner import NEEDS_COMPOSE, _expected_port, _install_steps, _start_command
 from repo_pilot.run_shape import Oracle, RunComponent, RunPlan, RunShape
@@ -221,14 +222,21 @@ def _exercise_plans(
 
 
 def plan_candidates(
-    profile: dict, evidence: list[dict], agent_result: object = None
+    profile: dict,
+    evidence: list[dict],
+    agent_result: object = None,
+    repo_dir: str | None = None,
 ) -> PlanningResult:
     """Rank canonical RunPlans for a repo, or defer/return empty.
 
     Deterministic shape detection gates generation: a service (Node script or an
     inferred Python/Go start) becomes ranked service RunPlans; a CLI (binary
-    entrypoint) becomes CLI RunPlans; a compose-only repo defers; anything else
-    yields no deterministic candidate (the LLM planner handles it upstream).
+    entrypoint) becomes CLI RunPlans; anything else yields no deterministic
+    candidate (the LLM planner handles it upstream). A compose-first repo (given
+    ``repo_dir`` to read the file from) goes through the **controlled compose
+    import**: a safe subset becomes a runnable plan, unsafe compose defers as
+    ``unsafe-compose``, anything beyond the subset as ``needs-compose`` — the
+    target's compose file is never executed verbatim (ADR-0002).
     """
     hints = detect_shapes(profile, evidence)
     entrypoints = profile.get("entrypoints", [])
@@ -264,5 +272,14 @@ def plan_candidates(
                                        RunShape.BATCH, "exit-zero", "batch"),
             classification="batch")
     if any(e.get("kind") == "compose_service" for e in evidence):
+        if repo_dir is not None:
+            imported = import_compose(repo_dir, profile=profile, evidence=evidence)
+            if imported.plan is not None:
+                return PlanningResult(
+                    candidates=[imported.plan],
+                    classification=imported.plan.shape.value,
+                )
+            if imported.deferred_reason is not None:
+                return PlanningResult(deferred_reason=imported.deferred_reason)
         return PlanningResult(deferred_reason=NEEDS_COMPOSE)
     return PlanningResult()
