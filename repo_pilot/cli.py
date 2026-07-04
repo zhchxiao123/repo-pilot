@@ -7,6 +7,7 @@ the artifact store; the analysis pipeline is filled in by later slices.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -178,10 +179,18 @@ def eval_command(
             poll_interval=2.0,
         )
 
-    out = Path(workdir)
-    out.mkdir(parents=True, exist_ok=True)
-    report = evaluate(cases, lambda case: run_case(case, _build, out))
-    click.echo(format_report(report))
+    # each sweep gets its own timestamped run dir; case artifacts nest inside it
+    run_dir = Path(workdir) / datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report = evaluate(
+        cases,
+        lambda case: run_case(case, _build, run_dir),
+        case_dir=lambda case: run_dir / case.name,
+    )
+    text = format_report(report)
+    (run_dir / "eval-report.md").write_text(text)
+    click.echo(text)
+    click.echo(f"Artifacts: {run_dir}")
     if report.coverage < threshold:
         raise SystemExit(1)
 

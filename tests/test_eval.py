@@ -134,6 +134,19 @@ def test_failure_clusters_include_shape():
     assert "verified:service->failed" in clusters
 
 
+def test_evaluate_attaches_artifact_dirs_to_results():
+    cases = [EvalCase("a", "u", "verified")]
+    report = evaluate(cases, _fake_run({"a": {}}), case_dir=lambda c: f"runs/{c.name}")
+    assert report.results[0].artifact_dir == "runs/a"
+
+
+def test_failure_clusters_point_to_artifact_dirs():
+    cases = [EvalCase("a", "u", "verified")]
+    report = evaluate(cases, _fake_run({"a": {}}), case_dir=lambda c: f"runs/{c.name}")
+    text = format_report(report)
+    assert "verified->no_candidate (1): a (runs/a)" in text
+
+
 def test_select_cases_limits_and_picks_named_case():
     cases = [EvalCase(n, "u", "verified") for n in ("a", "b", "c")]
     assert select_cases(cases) == cases
@@ -141,6 +154,63 @@ def test_select_cases_limits_and_picks_named_case():
     assert [c.name for c in select_cases(cases, case="b")] == ["b"]
     with pytest.raises(ValueError, match="nope"):
         select_cases(cases, case="nope")
+
+
+# --- eval/manifest.50.json: the pinned coverage manifest (plan Task 1.1) -----
+
+
+def test_manifest_50_pins_fifty_canonical_cases():
+    import re
+    from pathlib import Path
+
+    cases = load_manifest(Path(__file__).parent.parent / "eval" / "manifest.50.json")
+    assert len(cases) == 50
+    assert len({c.name for c in cases}) == 50, "case names must be unique"
+    for c in cases:
+        assert c.commit and re.fullmatch(r"[0-9a-f]{40}", c.commit), f"{c.name}: unpinned commit"
+        assert c.repo_url.startswith("https://"), c.name
+        kind = c.expected.split(":", 1)[0]
+        assert kind in {"verified", "not_runnable", "deferred", "no_candidate", "failed"}, c.name
+    # the manifest exercises the not-runnable path on purpose
+    assert sum(1 for c in cases if c.expected.startswith("not_runnable")) >= 5
+    # and the compose-first slice that Phase 2 will unlock
+    assert sum(1 for c in cases if c.expected == "verified:multi_component_service") >= 10
+
+
+# --- run_case: per-case artifact persistence (plan Task 1.3) -----------------
+
+
+def test_run_case_isolates_artifacts_and_writes_final_state_summary(tmp_path):
+    from repo_pilot.eval import run_case
+
+    case = EvalCase("demo", "https://x/demo", "verified:service")
+    fake = _FakeGraph({"https://x/demo": {"verified": True}})
+    final = run_case(case, lambda: fake, tmp_path)
+
+    case_dir = tmp_path / "demo"
+    # graph artifact paths all point into the case dir, with canonical names
+    assert final["profile_path"] == str(case_dir / "repo-profile.json")
+    assert final["evidence_path"] == str(case_dir / "evidence.jsonl")
+    assert final["report_path"] == str(case_dir / "report.md")
+    assert final["compose_path"] == str(case_dir / "compose.generated.yaml")
+
+    summary = json.loads((case_dir / "final-state-summary.json").read_text())
+    assert summary["verdict"] == "verified:service"
+    assert summary["expected"] == "verified:service"
+    assert summary["correct"] is True
+
+
+def test_run_case_writes_error_summary_and_reraises(tmp_path):
+    from repo_pilot.eval import run_case
+
+    case = EvalCase("boom", "https://x/boom", "verified")
+    fake = _FakeGraph({"https://x/boom": RuntimeError("kaput")})
+    with pytest.raises(RuntimeError, match="kaput"):
+        run_case(case, lambda: fake, tmp_path)
+
+    summary = json.loads((tmp_path / "boom" / "final-state-summary.json").read_text())
+    assert summary["verdict"] == "error"
+    assert "kaput" in summary["error"]
 
 
 # --- `repo-pilot eval` CLI: drives the sweep through a fake graph -----------
@@ -192,8 +262,16 @@ def test_eval_cli_reports_coverage_and_passes_threshold(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "Overall coverage: 50.0% (1/2)" in result.output
-    # each case ran isolated under the workdir
-    assert (workdir / "ok").is_dir() and (workdir / "miss").is_dir()
+    # each case ran isolated under a per-sweep timestamped run dir
+    runs = [p for p in workdir.iterdir() if p.is_dir()]
+    assert len(runs) == 1
+    run_dir = runs[0]
+    assert (run_dir / "ok").is_dir() and (run_dir / "miss").is_dir()
+    # the sweep report is persisted beside the case dirs and names them
+    report_md = (run_dir / "eval-report.md").read_text()
+    assert "Overall coverage: 50.0% (1/2)" in report_md
+    assert str(run_dir / "miss") in report_md  # failure clusters point at artifacts
+    assert json.loads((run_dir / "ok" / "final-state-summary.json").read_text())["correct"]
 
 
 def test_eval_cli_exits_nonzero_below_threshold(tmp_path, monkeypatch):
