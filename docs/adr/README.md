@@ -25,3 +25,4 @@ Each ADR: Context → Decision → Consequences. Status: proposed | accepted | s
 | [0017](0017-environment-provisioning.md) | Environment provisioning: services, env, hardening trust boundary | accepted |
 | [0018](0018-component-model-and-success-semantics.md) | Component model + non-service success semantics (oracles) | accepted |
 | [0019](0019-run-shape-as-primary-model.md) | Run Shape (`RunPlan(shape, components, oracle)`) is the primary internal model; v1 Runbook is a projection | accepted |
+| [0020](0020-agent-as-primary-consumer.md) | AI agent is the primary consumer; artifact is a reusable bring-up contract; boundary is bring-up, not downstream testing | accepted |
