@@ -187,6 +187,19 @@ def load_manifest(path: str | Path) -> list[EvalCase]:
     ]
 
 
+def select_cases(
+    cases: list[EvalCase], limit: int | None = None, case: str | None = None
+) -> list[EvalCase]:
+    """Narrow a manifest for local debugging: one named case, or the first N.
+    An unknown name is a usage error, not an empty sweep."""
+    if case is not None:
+        selected = [c for c in cases if c.name == case]
+        if not selected:
+            raise ValueError(f"no case named {case!r} in manifest")
+        return selected
+    return cases[:limit] if limit is not None else cases
+
+
 def run_case(case: EvalCase, build_graph_fn: Callable[[], Any], workdir: Path) -> dict:
     """Run one case through a freshly built graph, isolating its artifacts."""
     from repo_pilot.graph import initial_state

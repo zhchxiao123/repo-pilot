@@ -7,11 +7,13 @@ the artifact store; the analysis pipeline is filled in by later slices.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import click
 
 from repo_pilot.artifacts import ArtifactStore
 from repo_pilot.config import load_config
+from repo_pilot.eval import evaluate, format_report, load_manifest, run_case, select_cases
 from repo_pilot.executor import DockerSandboxExecutor, DockerUnavailable
 from repo_pilot.graph import build_graph, initial_state
 from repo_pilot.model_client import build_chat_model, build_model_client
@@ -121,6 +123,67 @@ def run(
 
     click.echo(f"Verified: {final.get('verified', False)}")
     click.echo(f"Report: {job.report_path}")
+
+
+@main.command(name="eval")
+@click.argument("manifest", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--workdir",
+    default="artifacts/eval-runs",
+    help="Directory to write per-case artifacts under.",
+)
+@click.option(
+    "--threshold",
+    default=0.5,
+    type=float,
+    help="Exit non-zero when overall coverage falls below this fraction.",
+)
+@click.option("--no-llm", is_flag=True, help="Disable the LLM fallback seam.")
+@click.option("--limit", default=None, type=int, help="Run only the first N cases.")
+@click.option("--case", "case_name", default=None, help="Run one named case.")
+def eval_command(
+    manifest: str,
+    workdir: str,
+    threshold: float,
+    no_llm: bool,
+    limit: int | None,
+    case_name: str | None,
+) -> None:
+    """Sweep MANIFEST through the real pipeline and score verdict coverage.
+
+    Each case runs isolated under --workdir/<case-name>; a crashing case records
+    an ``error`` verdict without sinking the sweep (see docs/eval-harness.md).
+    """
+    try:
+        cases = select_cases(load_manifest(manifest), limit=limit, case=case_name)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    config = load_config()
+    model_client = chat_model = None
+    if not no_llm:
+        try:
+            model_client = build_model_client(config)
+            chat_model = build_chat_model(config)
+        except Exception as exc:  # missing provider package, bad config, etc.
+            click.echo(f"LLM disabled ({exc}); running deterministic path only.")
+
+    def _build():
+        return build_graph(
+            DockerSandboxExecutor(),
+            security=default_security(),
+            model_client=model_client,
+            chat_model=chat_model,
+            healthcheck_retries=60,
+            poll_interval=2.0,
+        )
+
+    out = Path(workdir)
+    out.mkdir(parents=True, exist_ok=True)
+    report = evaluate(cases, lambda case: run_case(case, _build, out))
+    click.echo(format_report(report))
+    if report.coverage < threshold:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

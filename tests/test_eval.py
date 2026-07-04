@@ -1,9 +1,12 @@
 """The coverage eval harness scores verdicts and clusters failures (#44).
 
-Pure core — driven with a fake run_fn, no Docker or LLM.
+Pure core — driven with a fake run_fn, no Docker or LLM. The CLI tests drive
+`repo-pilot eval` with a fake graph, so no Docker or LLM either.
 """
 
 import json
+
+import pytest
 
 from repo_pilot.eval import (
     EvalCase,
@@ -11,6 +14,7 @@ from repo_pilot.eval import (
     evaluate,
     format_report,
     load_manifest,
+    select_cases,
     verdict_of,
 )
 
@@ -128,6 +132,124 @@ def test_failure_clusters_include_shape():
     finals = {"a": {"runbook": {"id": "a"}, "verified": False}}  # -> failed
     clusters = cluster_failures(evaluate(cases, _fake_run(finals)))
     assert "verified:service->failed" in clusters
+
+
+def test_select_cases_limits_and_picks_named_case():
+    cases = [EvalCase(n, "u", "verified") for n in ("a", "b", "c")]
+    assert select_cases(cases) == cases
+    assert [c.name for c in select_cases(cases, limit=2)] == ["a", "b"]
+    assert [c.name for c in select_cases(cases, case="b")] == ["b"]
+    with pytest.raises(ValueError, match="nope"):
+        select_cases(cases, case="nope")
+
+
+# --- `repo-pilot eval` CLI: drives the sweep through a fake graph -----------
+
+
+class _FakeGraph:
+    """Stands in for the compiled graph: returns a canned final state per repo_url."""
+
+    def __init__(self, finals_by_url):
+        self._finals = finals_by_url
+
+    def invoke(self, state):
+        final = self._finals[state["repo_url"]]
+        if isinstance(final, Exception):
+            raise final
+        return {**state, **final}
+
+
+def _cli_eval(tmp_path, monkeypatch, manifest_cases, finals_by_url, *extra_args):
+    from click.testing import CliRunner
+
+    from repo_pilot.cli import main
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(manifest_cases))
+    monkeypatch.setattr(
+        "repo_pilot.cli.build_graph", lambda *a, **k: _FakeGraph(finals_by_url)
+    )
+    workdir = tmp_path / "eval-runs"
+    return (
+        CliRunner().invoke(
+            main,
+            ["eval", str(manifest), "--workdir", str(workdir), "--no-llm", *extra_args],
+        ),
+        workdir,
+    )
+
+
+def test_eval_cli_reports_coverage_and_passes_threshold(tmp_path, monkeypatch):
+    result, workdir = _cli_eval(
+        tmp_path,
+        monkeypatch,
+        [
+            {"name": "ok", "repo_url": "https://x/ok", "expected": "verified:service"},
+            {"name": "miss", "repo_url": "https://x/miss", "expected": "verified:service"},
+        ],
+        {"https://x/ok": {"verified": True}, "https://x/miss": {}},
+        "--threshold", "0.5",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Overall coverage: 50.0% (1/2)" in result.output
+    # each case ran isolated under the workdir
+    assert (workdir / "ok").is_dir() and (workdir / "miss").is_dir()
+
+
+def test_eval_cli_exits_nonzero_below_threshold(tmp_path, monkeypatch):
+    result, _ = _cli_eval(
+        tmp_path,
+        monkeypatch,
+        [{"name": "miss", "repo_url": "https://x/miss", "expected": "verified:service"}],
+        {"https://x/miss": {}},
+        "--threshold", "0.5",
+    )
+    assert result.exit_code == 1
+    assert "Overall coverage: 0.0%" in result.output
+
+
+def test_eval_cli_case_crash_records_error_and_continues(tmp_path, monkeypatch):
+    result, _ = _cli_eval(
+        tmp_path,
+        monkeypatch,
+        [
+            {"name": "boom", "repo_url": "https://x/boom", "expected": "verified:service"},
+            {"name": "ok", "repo_url": "https://x/ok", "expected": "verified:service"},
+        ],
+        {"https://x/boom": RuntimeError("clone failed"), "https://x/ok": {"verified": True}},
+        "--threshold", "0.5",
+    )
+    assert result.exit_code == 0, result.output
+    assert "boom: expected verified:service, got error" in result.output
+    assert "OK ok" in result.output
+
+
+def test_eval_cli_limit_and_case_select_subset(tmp_path, monkeypatch):
+    cases = [
+        {"name": "a", "repo_url": "https://x/a", "expected": "verified:service"},
+        {"name": "b", "repo_url": "https://x/b", "expected": "verified:service"},
+    ]
+    finals = {"https://x/a": {"verified": True}, "https://x/b": {"verified": True}}
+
+    result, _ = _cli_eval(tmp_path, monkeypatch, cases, finals, "--limit", "1")
+    assert result.exit_code == 0, result.output
+    assert "(1/1)" in result.output and "b:" not in result.output
+
+    result, _ = _cli_eval(tmp_path, monkeypatch, cases, finals, "--case", "b")
+    assert result.exit_code == 0, result.output
+    assert "(1/1)" in result.output and "a:" not in result.output
+
+
+def test_eval_cli_rejects_unknown_case_name(tmp_path, monkeypatch):
+    result, _ = _cli_eval(
+        tmp_path,
+        monkeypatch,
+        [{"name": "a", "repo_url": "https://x/a", "expected": "verified"}],
+        {"https://x/a": {"verified": True}},
+        "--case", "nope",
+    )
+    assert result.exit_code != 0
+    assert "nope" in result.output
 
 
 def test_report_shows_per_shape_coverage():
