@@ -46,11 +46,22 @@ is optional. `expected` may be a coarse kind (`verified`) or a compound
 Needs Docker (and an LLM key for the plan agent, or `--no-llm` for rules only):
 
 ```
-python -m repo_pilot.eval eval/manifest.example.json --out eval/report.md
+repo-pilot eval eval/manifest.example.json --workdir artifacts/eval-runs
 ```
+
+Options:
+
+- `--workdir DIR` — per-case artifacts land under `DIR/<case-name>/` (default
+  `artifacts/eval-runs`)
+- `--threshold FLOAT` — exit non-zero when overall coverage falls below this
+  fraction (default `0.5`), so CI can gate on it
+- `--no-llm` — deterministic path only
+- `--limit N` / `--case NAME` — run a subset for local debugging
 
 It prints a markdown report: overall + per-shape coverage, a per-case OK/XX line,
 and **failure clusters** grouped by `expected->actual` (dominant first) — the
 shape rides along in the signature (e.g. `verified:service->failed`) so you can
 see *which shape* is missing coverage and *how*. A single case that errors is recorded as `error`, not fatal.
-The process exits non-zero when coverage < 90%, so CI can gate on it.
+
+(`python -m repo_pilot.eval` remains as a legacy entry point with a fixed 90%
+gate; prefer the `repo-pilot eval` command.)
