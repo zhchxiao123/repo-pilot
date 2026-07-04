@@ -137,10 +137,50 @@ Untrusted repo code runs inside a hardened container:
 > host firewall rules is a planned follow-up (see ADR-0007 / ADR-0013). The
 > container hardening, secret handling, and redaction are enforced today.
 
-## Scope (v1)
+## Scope — what works today
 
-- Single-service **Node** web apps (Express, Vite).
-- Not yet: other languages, multi-service / compose-native repos, service
-  dependencies (postgres/redis), the automatic repair loop, and strong-oracle /
-  API-contract / UI tests. These are on the roadmap — see
-  [ARCHITECTURE.md](ARCHITECTURE.md).
+**Deterministic planning paths** (no LLM needed):
+
+- **Node** (Express, Vite, plain `http` servers — `package.json` scripts)
+- **Python** (Flask, FastAPI/uvicorn, Django — requirements/pyproject + entrypoints)
+- **Go** (`go.mod`: `go run`/`go build`, CLIs and HTTP services)
+- **Make** (Makefile-driven C/build repos via a build-tool pseudo-ecosystem)
+
+Stacks the rules don't recognize fall through to the **plan agent** (LLM
+fallback, sandbox-verified — see above). Either way the outcome is one of the
+**run shapes**: `service`, `multi_component_service`, `cli`, `library`,
+`build`, `batch`, or `docs` (not runnable) — success is shape-specific: a
+service must answer HTTP, a cli/batch must run to a clean exit, a library must
+pass its test suite, a build must build.
+
+**Delivered:** the automatic **repair loop** (ADR-0012: on a failed verify,
+diagnose rules-first / LLM-fallback, patch the RunPlan, retry — the sandbox
+still adjudicates), **weak-oracle smoke tests** against verified services, and
+the **eval harness** (`repo-pilot eval`, see
+[eval-harness.md](eval-harness.md)) that scores verdict coverage over the
+pinned 50-case manifest.
+
+**Explicit boundaries** (reported honestly, not silently failed):
+
+- **Compose-native repos**: a repo whose only run path is its own
+  `docker-compose.yml` is reported `deferred: needs-compose`. The target's
+  compose file is treated as *evidence*, never executed verbatim; a controlled
+  compose import is the next planned slice (see the
+  [coverage expansion plan](plans/2026-07-04-coverage-driven-runtime-expansion.md)).
+- **Strong-oracle tests** (OpenAPI contract, UI tests): not yet — smoke tests
+  are weak-oracle only. Downstream functional testing is out of scope by
+  design: repo-pilot's boundary is bring-up — get the project running,
+  machine-readably prove it's ready, and hand off to the consuming agent
+  (ADR-0020).
+- **Other ecosystems** (Java, Rust, Ruby/PHP/.NET): planned, gated on eval
+  cases that justify them.
+
+## Eval
+
+```
+repo-pilot eval eval/manifest.50.json --workdir artifacts/eval-runs
+```
+
+Sweeps a pinned manifest of repos through the full pipeline and scores how
+often the verdict matches the expected one, with per-case artifacts and
+failure clusters. Full reference: [eval-harness.md](eval-harness.md).

@@ -58,7 +58,7 @@ healthcheck, discovery, and smoke tests. The LLM is a *gated fallback* — chief
 (a stack rules don't cover), the model proposes full Run Plan candidates from the
 profile + evidence + repo files, and the **sandbox still verifies** them. Details in
 [`determinism-boundary.md`](determinism-boundary.md); the confidence math in
-[`confidence-model.md`](confidence-model.md); the (planned) repair loop in
+[`confidence-model.md`](confidence-model.md); the repair loop in
 [`repair-loop.md`](repair-loop.md).
 
 ## The sandbox
@@ -97,17 +97,29 @@ Structured contracts in [`../schemas/`](../schemas/):
 
 ## Roadmap
 
-Delivered v1 (depth-first, Node): clone→report spine, evidence-based planning,
-real Docker verify, discovery, weak-oracle smoke, security envelope, LLM fallback.
+Delivered: clone→report spine on the canonical Run Plan; deterministic
+language-aware planning for **Node / Python / Go / Make**; shape-specific
+verification for service / multi-component / cli / library / build / batch /
+docs (ADR-0018/0019); the **repair loop** (ADR-0012); LLM-assisted planning for
+unrecognized stacks (ADR-0016); discovery + weak-oracle smoke; the security
+envelope; portable reproduce compose artifacts; and the **eval harness** with a
+pinned 50-case manifest (`repo-pilot eval`, [eval-harness.md](eval-harness.md)).
 
-Next:
-- More languages: Python (FastAPI/Django), Java (Spring Boot), Go.
-- Service dependencies (postgres/redis) as sibling compose services.
-- The **repair loop** (ADR-0012) — auto-diagnose + patch the Runbook on failure.
-- Strong-oracle / OpenAPI-contract / Playwright UI tests.
+Next — driven by eval failure clusters, in the order of the
+[coverage expansion plan](plans/2026-07-04-coverage-driven-runtime-expansion.md),
+under ADR-0020's product boundary (bring-up, not downstream testing):
+
+- **Compose-native controlled import** — convert a safe subset of a target's
+  compose file into a canonical Run Plan (never execute it verbatim).
+- **Dockerfile-first planning** — turn Dockerfile CMD/EXPOSE evidence into
+  runnable service plans.
+- Monorepo/workspace support (npm/pnpm/yarn workspaces, turborepo, nx).
+- More ecosystems (Java, Rust — gated on eval cases).
+- Report trust: evidence sections + structured failure reasons.
 - **Egress enforcement** (apply the computed policy as host firewall rules).
 - Service/API surface + queue for concurrent, remote jobs (ADR-0001 defers this).
 
 ## Decision records
 
-See [adr/README.md](adr/README.md) for ADR-0001 through ADR-0013.
+See [adr/README.md](adr/README.md) for the full index (ADR-0001 through
+ADR-0020).
