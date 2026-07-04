@@ -162,10 +162,16 @@ pinned 50-case manifest.
 
 **Explicit boundaries** (reported honestly, not silently failed):
 
-- **Compose-native repos**: a repo whose only run path is its own
-  `docker-compose.yml` is reported `deferred: needs-compose`. The target's
-  compose file is treated as *evidence*, never executed verbatim; a controlled
-  compose import is the next planned slice (see the
+- **Compose-native repos** go through a **controlled import**: a safe subset
+  of the target's compose file (image/build-in-repo/command/ports/environment/
+  depends_on/healthcheck/working_dir) is converted into a canonical Run Plan
+  and verified through repo-pilot's own hardened compose — the target's compose
+  file is *never executed verbatim*. Compose that requests host power
+  (privileged, host namespaces, docker socket, absolute mounts, contexts
+  escaping the repo) is reported `deferred: unsafe-compose`; anything beyond
+  the subset (`extends`, `env_file`, `${...}` interpolation, build-only
+  services whose runtime lives in a Dockerfile) is `deferred: needs-compose`
+  (see the
   [coverage expansion plan](plans/2026-07-04-coverage-driven-runtime-expansion.md)).
 - **Strong-oracle tests** (OpenAPI contract, UI tests): not yet — smoke tests
   are weak-oracle only. Downstream functional testing is out of scope by

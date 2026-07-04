@@ -177,7 +177,10 @@ def build_graph(
         }
 
     def _plan(state: State) -> dict:
-        result = plan_candidates(state["profile"], state["evidence"])
+        result = plan_candidates(
+            state["profile"], state["evidence"],
+            repo_dir=state["repo_ref"].repo_dir,
+        )
         if result.candidates:
             return _planned(result.candidates[0], state,
                             {"classification": result.classification})

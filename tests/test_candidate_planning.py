@@ -75,9 +75,67 @@ def test_service_plan_carries_repo_and_evidence_refs():
 
 
 def test_compose_only_repo_defers():
+    # no repo_dir to import from -> the pre-import behavior is preserved
     profile = {"repo": {"url": "u", "commit": "c"}, "entrypoints": []}
     evidence = [{"id": "e", "kind": "compose_service"}]
     result = plan_candidates(profile, evidence)
+    assert not result.candidates
+    assert result.deferred_reason == "needs-compose"
+
+
+def _compose_repo(tmp_path, services):
+    import yaml
+
+    (tmp_path / "docker-compose.yml").write_text(yaml.safe_dump({"services": services}))
+    return str(tmp_path)
+
+
+def test_compose_first_repo_imports_a_runnable_plan(tmp_path):
+    from repo_pilot.run_shape import RunShape
+
+    repo_dir = _compose_repo(tmp_path, {
+        "web": {"build": {"context": "."}, "command": "python app.py",
+                "ports": ["8000:8000"], "depends_on": ["db"]},
+        "db": {"image": "postgres:16",
+               "healthcheck": {"test": ["CMD-SHELL", "pg_isready"]}},
+    })
+    profile = {"repo": {"url": "u", "commit": "c"}, "entrypoints": []}
+    evidence = [{"id": "e", "kind": "compose_service"}]
+
+    result = plan_candidates(profile, evidence, repo_dir=repo_dir)
+
+    assert result.deferred_reason is None
+    assert result.classification == "multi_component_service"
+    plan = result.candidates[0]
+    assert plan.shape == RunShape.MULTI_COMPONENT_SERVICE
+    assert plan.evidence_refs == ["e"]
+    assert plan.repo == {"url": "u", "commit": "c"}
+
+
+def test_unsafe_compose_defers_as_unsafe_not_executed(tmp_path):
+    repo_dir = _compose_repo(tmp_path, {
+        "web": {"image": "app:latest", "command": "run",
+                "volumes": ["/var/run/docker.sock:/var/run/docker.sock"]},
+    })
+    profile = {"repo": {"url": "u", "commit": "c"}, "entrypoints": []}
+    evidence = [{"id": "e", "kind": "compose_service"}]
+
+    result = plan_candidates(profile, evidence, repo_dir=repo_dir)
+
+    assert not result.candidates
+    assert result.deferred_reason == "unsafe-compose"
+
+
+def test_too_complex_compose_defers_as_needs_compose(tmp_path):
+    repo_dir = _compose_repo(tmp_path, {
+        "web": {"build": {"context": "."}, "command": "python app.py",
+                "env_file": ".env"},
+    })
+    profile = {"repo": {"url": "u", "commit": "c"}, "entrypoints": []}
+    evidence = [{"id": "e", "kind": "compose_service"}]
+
+    result = plan_candidates(profile, evidence, repo_dir=repo_dir)
+
     assert not result.candidates
     assert result.deferred_reason == "needs-compose"
 
