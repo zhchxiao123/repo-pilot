@@ -61,6 +61,9 @@ class EvalResult:
     expected: str
     actual: str
     detail: str = ""
+    # where the case's persisted artifacts live, so failure clusters can point
+    # straight at the evidence ("" when the runner doesn't persist any)
+    artifact_dir: str = ""
 
     @property
     def correct(self) -> bool:
@@ -106,17 +109,25 @@ def _hint(final: dict) -> str:
     return ""
 
 
-def evaluate(cases: list[EvalCase], run_fn: Callable[[EvalCase], dict]) -> EvalReport:
+def evaluate(
+    cases: list[EvalCase],
+    run_fn: Callable[[EvalCase], dict],
+    case_dir: Callable[[EvalCase], Any] | None = None,
+) -> EvalReport:
     """Run every case through ``run_fn`` (which returns a graph final state) and
     score it. A run_fn that raises is recorded as an ``error`` verdict rather than
-    aborting the whole sweep."""
+    aborting the whole sweep. ``case_dir`` maps a case to its persisted artifact
+    directory so results (and failure clusters) can point at the evidence."""
     results = []
     for case in cases:
+        where = str(case_dir(case)) if case_dir else ""
         try:
             final = run_fn(case)
-            results.append(EvalResult(case.name, case.expected, verdict_of(final), _hint(final)))
+            results.append(
+                EvalResult(case.name, case.expected, verdict_of(final), _hint(final), where)
+            )
         except Exception as exc:  # a single case must not sink the eval
-            results.append(EvalResult(case.name, case.expected, "error", str(exc)[:160]))
+            results.append(EvalResult(case.name, case.expected, "error", str(exc)[:160], where))
     return EvalReport(results)
 
 
@@ -168,8 +179,10 @@ def format_report(report: EvalReport) -> str:
     clusters = cluster_failures(report)
     if clusters:
         lines += ["", "## Failure clusters", ""]
+        dirs = {r.name: r.artifact_dir for r in report.results}
         for sig, names in clusters.items():
-            lines.append(f"- {sig} ({len(names)}): {', '.join(names)}")
+            entries = ", ".join(f"{n} ({dirs[n]})" if dirs.get(n) else n for n in names)
+            lines.append(f"- {sig} ({len(names)}): {entries}")
     return "\n".join(lines) + "\n"
 
 
@@ -201,23 +214,59 @@ def select_cases(
 
 
 def run_case(case: EvalCase, build_graph_fn: Callable[[], Any], workdir: Path) -> dict:
-    """Run one case through a freshly built graph, isolating its artifacts."""
+    """Run one case through a freshly built graph, isolating its artifacts under
+    ``workdir/<case-name>/`` (same artifact names as a normal job, per Task 1.3).
+    A ``final-state-summary.json`` is always written — also on a crash — so the
+    sweep report can be read without rerunning the case."""
     from repo_pilot.graph import initial_state
 
     case_dir = workdir / case.name
     case_dir.mkdir(parents=True, exist_ok=True)
     graph = build_graph_fn()
-    return graph.invoke(
-        initial_state(
-            repo_url=case.repo_url,
-            commit=case.commit,
-            repo_dir=str(case_dir / "repo"),
-            report_path=str(case_dir / "report.md"),
-            runbook_path=str(case_dir / "runbook.yaml"),
-            profile_path=str(case_dir / "profile.json"),
-            evidence_path=str(case_dir / "evidence.jsonl"),
+    try:
+        final = graph.invoke(
+            initial_state(
+                repo_url=case.repo_url,
+                commit=case.commit,
+                repo_dir=str(case_dir / "repo"),
+                report_path=str(case_dir / "report.md"),
+                runbook_path=str(case_dir / "runbook.yaml"),
+                profile_path=str(case_dir / "repo-profile.json"),
+                evidence_path=str(case_dir / "evidence.jsonl"),
+                compose_path=str(case_dir / "compose.generated.yaml"),
+            )
         )
-    )
+    except Exception as exc:
+        _write_summary(case, case_dir, verdict="error", error=str(exc)[:500])
+        raise
+    _write_summary(case, case_dir, verdict=verdict_of(final), final=final)
+    return final
+
+
+def _write_summary(
+    case: EvalCase,
+    case_dir: Path,
+    *,
+    verdict: str,
+    final: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist a JSON-safe digest of how the case ended next to its artifacts."""
+    final = final or {}
+    summary = {
+        "name": case.name,
+        "repo_url": case.repo_url,
+        "commit": case.commit,
+        "expected": case.expected,
+        "verdict": verdict,
+        "correct": matches(case.expected, verdict),
+        "deferred_reason": final.get("deferred_reason"),
+        "classification": final.get("classification"),
+        "last_logs": (final.get("last_logs") or "")[-2000:] or None,
+        "error": error,
+        "artifacts": sorted(p.name for p in case_dir.iterdir() if p.is_file()),
+    }
+    (case_dir / "final-state-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
